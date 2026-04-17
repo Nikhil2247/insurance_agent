@@ -1,0 +1,20 @@
+/node_modules
+/dist
+/build
+/.env
+/.idea
+/.vscode
+/.DS_Store
+/logs
+/env.local
+/env.development.local
+# Ignore Firebase config files
+/frontend-react/.env
+/frontend-react/.env.local
+/frontend-react/.env.development.local
+/frontend-react/node_modules
+/backend/.env
+
+/frontend-react/public/data
+
+
