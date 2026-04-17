@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Database, Upload, RefreshCw, Trash2, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
-import { seedDatabase, clearCache, getDataStats, reloadFromDatabase, reloadFromCSV, isLoadedFromDatabase } from '@/services/insuranceData';
+import { seedDatabase, clearCache, getDataStats, reloadFromDatabase, reloadFromCSV } from '@/services/insuranceData';
 import { clearDatabase, getDatabaseStats } from '@/services/databaseService';
 
 interface Stats {

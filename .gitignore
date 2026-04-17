@@ -13,6 +13,9 @@
 /frontend-react/.env.local
 /frontend-react/.env.development.local
 /frontend-react/node_modules
+/backend/node_modules
+/frontend-react/dist
+
 /backend/.env
 
 /frontend-react/public/data

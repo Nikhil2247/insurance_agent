@@ -3,11 +3,9 @@ import {
   isDatabaseSeeded,
   loadCarriersFromDB,
   loadAppetitesFromDB,
-  loadCoverageTypesFromDB,
-  searchCarriersFromDB,
   seedDatabaseFromCSV
 } from './databaseService';
-import { CarrierAppetiteDocument, COVERAGE_TYPE_MAPPINGS } from '@/types/database';
+import { COVERAGE_TYPE_MAPPINGS } from '@/types/database';
 
 export interface CarrierInfo {
   carrier: string;
@@ -486,7 +484,7 @@ export function getCarrierDetails(carrierName: string): CarrierInfo | undefined 
   return undefined;
 }
 
-export function getCarrierRules(carrierName: string): RuleRecord[] {
+export function getCarrierRules(_carrierName: string): RuleRecord[] {
   // For now, return empty - rules would come from a separate file
   return [];
 }

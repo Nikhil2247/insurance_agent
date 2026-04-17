@@ -3,7 +3,6 @@ import {
   doc,
   getDocs,
   setDoc,
-  writeBatch,
   query,
   where,
   Timestamp,
@@ -29,7 +28,6 @@ const COLLECTIONS = {
 // Check if database has been seeded
 export async function isDatabaseSeeded(): Promise<boolean> {
   try {
-    const metadataRef = doc(db, COLLECTIONS.METADATA, 'seedStatus');
     const carriersRef = collection(db, COLLECTIONS.CARRIERS);
     const snapshot = await getDocs(carriersRef);
     return snapshot.size > 0;
@@ -373,7 +371,6 @@ export async function searchCarriersFromDB(
 
 // Get carrier details
 export async function getCarrierFromDB(carrierId: string): Promise<CarrierDocument | null> {
-  const docRef = doc(db, COLLECTIONS.CARRIERS, carrierId);
   const snapshot = await getDocs(collection(db, COLLECTIONS.CARRIERS));
   const found = snapshot.docs.find(d => d.id === carrierId);
 
@@ -414,8 +411,6 @@ export async function getDatabaseStats(): Promise<{
       getDocs(collection(db, COLLECTIONS.CARRIER_APPETITES)),
       getDocs(collection(db, COLLECTIONS.COVERAGE_TYPES)),
     ]);
-
-    const metadataRef = doc(db, COLLECTIONS.METADATA, 'seedStatus');
 
     return {
       totalCarriers: carriers.size,

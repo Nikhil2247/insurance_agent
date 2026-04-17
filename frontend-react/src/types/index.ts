@@ -44,6 +44,16 @@ export interface ExcludedCarrier {
   reason: string
 }
 
+export interface CarrierRecommendation {
+  carrier: string
+  score: number
+  appetite_status: 'yes' | 'conditional' | 'no'
+  reasons: string[]
+  caveats: string[]
+  coverage_info?: string
+  notes?: string
+}
+
 export interface ChatResponse {
   response: string
   conversation_id: string
