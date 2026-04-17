@@ -74,52 +74,31 @@ Provide a brief summary, then output a JSON block with CONCISE recommendations.
 ### For FOLLOW-UP messages (user selects a carrier):
 When user says "I'd like to proceed with [Carrier]" - this is a FOLLOW-UP about their ORIGINAL query.
 
-DO NOT output JSON. Instead, provide a COMPREHENSIVE detailed text response with:
+DO NOT output JSON. Instead, provide a CONCISE detailed response (300-400 words max):
 
 **Format your response like this:**
 
-## [Carrier Name] - Detailed Placement Guide
+## [Carrier Name] - Placement Summary
 
 ### Overview
-2-3 paragraphs about the carrier, their strengths, and why they're suitable for the ORIGINAL request.
+1-2 sentences about the carrier and fit for the request.
 
 ### Key Information
 | Attribute | Details |
 |-----------|---------|
-| States | Comprehensive list of states |
-| Known For | Detailed specialties |
-| Type | Direct/Wholesaler with explanation |
-| Best For | Detailed target market description |
-| Financial Rating | AM Best rating |
+| States | Key states listed |
+| Known For | Main specialties |
+| Type | Direct/Wholesaler |
 
-### Coverage Details for [Original LOB]
-- **Coverage Limits:** Detailed range they typically write
-- **Policy Forms:** All applicable forms (HO-3, HO-5, etc.)
-- **Deductibles:** All typical options
-- **Special Endorsements:** Available add-ons and riders
-- **Exclusions:** Important exclusions to note
+### Coverage & Requirements
+- **Limits:** Typical range
+- **Key Requirements:** 2-3 bullet points
+- **Pricing:** Brief estimate
 
-### Underwriting Requirements
-- Detailed requirement 1 with specifics
-- Detailed requirement 2 with specifics
-- Detailed requirement 3 with specifics
-- Documentation needed
-
-### Pricing Expectations
-- Expected premium range for the requested coverage
-- Factors affecting pricing
-- Available discounts (multi-policy, claims-free, etc.)
-
-### Next Steps for Placement
-1. Detailed step 1
-2. Detailed step 2
-3. Detailed step 3
-4. Timeline expectations
-
-### Contact Information
-- How to reach this carrier or submit business
-- Portal or submission details
-- Key contacts if available
+### Next Steps
+1. Submit application via [method]
+2. Required documents
+3. Expected timeline
 
 ---
 
@@ -128,8 +107,8 @@ DO NOT output JSON. Instead, provide a COMPREHENSIVE detailed text response with
 2. matchScore must be 0-100
 3. appetiteStatus: "Strong Appetite", "Moderate Appetite", "Limited Appetite", or "Conditional"
 4. For INITIAL queries: Keep card content BRIEF (~100 words per card)
-5. For FOLLOW-UPS: Provide COMPREHENSIVE details (500+ words)
-6. Use tables and bullet points for readability in follow-ups
+5. For FOLLOW-UPS: Keep responses CONCISE (300-400 words max)
+6. Use tables and bullet points for readability
 7. **BOLD important terms** using **markdown bold syntax** - bold key information like:
    - Coverage amounts (e.g., **$500,000**)
    - Important limits (e.g., **minimum $300k underlying**)
@@ -299,7 +278,7 @@ async function callLLM(messages: ChatMessage[]): Promise<string> {
       model: LLM_MODEL,
       messages: messages,
       temperature: 0.7,
-      max_tokens: 4096
+      max_tokens: 800
     })
   });
 
@@ -352,16 +331,13 @@ export async function chat(
 
 Original request context: "${originalContext}"
 
-DO NOT generate a new JSON analysis. Instead, provide a detailed placement guide for ${selectedCarrier} in the context of the original request. Use markdown formatting with tables, bullet points, and clear sections.
+DO NOT generate a new JSON analysis. Instead, provide a CONCISE placement summary (300-400 words max) for ${selectedCarrier}. Use markdown formatting with a brief table and bullet points.
 
-Include:
-- Detailed carrier overview
-- Key information table
-- Coverage specifics for the original LOB
-- Underwriting requirements
-- Pricing expectations
-- Step-by-step placement instructions
-- Contact/submission information`
+Include briefly:
+- 1-2 sentence overview
+- Key info table (states, known for, type)
+- Coverage limits & key requirements (2-3 bullets)
+- Next steps (3 numbered steps)`
     });
   } else {
     // This is a new query - search for carriers

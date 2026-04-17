@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { Settings2, MessageSquare, LogOut, Menu, Database } from 'lucide-react';
+import { Settings2, MessageSquare, LogOut, Menu, Database, FileDown } from 'lucide-react';
+import { exportChatToPDF } from '@/services/pdfExport';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
@@ -278,6 +279,18 @@ export function ChatInterface() {
 
   const hasMessages = messages.length > 0;
 
+  const handleExportPDF = async () => {
+    if (messages.length === 0) return;
+    try {
+      await exportChatToPDF(messages, {
+        title: chats.find(c => c.id === activeChatId)?.title || 'Insurance Chat',
+        includeTimestamps: true
+      });
+    } catch (error) {
+      console.error('Failed to export PDF:', error);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-white">
       {/* Sidebar */}
@@ -321,6 +334,15 @@ export function ChatInterface() {
             <div className="flex items-center gap-1 sm:gap-2 shrink-0">
               {user && (
                 <span className="text-sm text-gray-600 mr-1 sm:mr-2 hidden sm:inline">{user.name}</span>
+              )}
+              {hasMessages && (
+                <button
+                  onClick={handleExportPDF}
+                  className="p-2 text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100"
+                  title="Export to PDF"
+                >
+                  <FileDown className="w-4 h-4" />
+                </button>
               )}
               <a
                 href="#/admin"
