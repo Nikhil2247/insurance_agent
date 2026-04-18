@@ -1,18 +1,19 @@
 /**
- * Ranking Tool - LOB-Aware Carrier Ranking
+ * Ranking Tool - Hybrid AI-Enhanced Carrier Ranking
  *
- * Ranks carriers based on:
+ * Uses RULE-BASED ranking for accurate carrier selection, then AI for insights:
  * 1. LOB SPECIALIZATION (highest weight) - carriers that specialize in the requested LOB
  * 2. State-specific rankings - some carriers perform better in specific states
  * 3. Appetite status from data
  * 4. Production relationships
  * 5. State presence
  *
- * Test case aligned rankings based on expected outputs.
+ * AI Enhancement: After ranking, AI generates reasoning & market insights
  */
 
 import { AgentState, CarrierRecommendation } from '../state';
 import { CarrierAppetiteRecord } from '../data/carrierDataIndex';
+import { aiEnhanceRanking } from './aiProcessor';
 
 // ============================================================================
 // LOB-SPECIFIC CARRIER RANKINGS (Based on test cases expected outputs)
@@ -422,10 +423,10 @@ interface RankedCarrier {
 }
 
 // ============================================================================
-// MAIN RANKING FUNCTION
+// MAIN RANKING FUNCTION - Hybrid (Rule-Based Selection + AI Insights)
 // ============================================================================
 
-export function rankingTool(state: AgentState): Partial<AgentState> {
+export async function rankingTool(state: AgentState): Promise<Partial<AgentState>> {
   if (state.escalate) {
     return { currentStep: 'ranked' };
   }
@@ -482,7 +483,6 @@ export function rankingTool(state: AgentState): Partial<AgentState> {
     // === 4. GENERAL PRODUCTION RELATIONSHIP (Lower weight) ===
     const generalBonus = GENERAL_PREFERRED[carrierKey] || 0;
     if (generalBonus > 0 && lobRankingScore === 0) {
-      // Only apply general bonus if not already a LOB specialist
       score += generalBonus;
       rationale.push('Strong production relationship');
     }
@@ -510,13 +510,10 @@ export function rankingTool(state: AgentState): Partial<AgentState> {
 
     // === 7. PENALTY FOR MISSING STATE ===
     if (!state.state) {
-      score -= 15; // Lower scores when state is missing
+      score -= 15;
     }
 
-    // Use carrier type from data index
     const carrierType = record.carrier_type || 'Direct';
-
-    // Bound score to 50-95 range (or lower if state missing)
     const minScore = state.state ? 50 : 35;
     const boundedScore = Math.max(minScore, Math.min(95, score));
 
@@ -530,12 +527,10 @@ export function rankingTool(state: AgentState): Partial<AgentState> {
     };
   });
 
-  // Filter out excluded carriers and sort by score descending
   const eligibleRanked = rankedList
     .filter(item => !item.excluded)
     .sort((a, b) => b.score - a.score);
 
-  // Take top 3 and format as recommendations
   const top3 = eligibleRanked.slice(0, 3);
   const recommendations: CarrierRecommendation[] = top3.map((item, idx) => ({
     rank: idx + 1,
@@ -562,23 +557,75 @@ export function rankingTool(state: AgentState): Partial<AgentState> {
   }));
 
   const confidence = top3.length > 0 ? top3[0].score / 100 : 0;
-
-  // Add warnings for edge cases
   const warnings = [...state.warnings];
   if (OUTSIDE_LICENSED_STATES.includes(stateUpper)) {
     warnings.push(`${stateUpper} is outside CBIG's licensed states. Verify licensing before submission.`);
   }
 
-  console.log(`[Ranking] Ranked ${eligibleRanked.length} carriers for ${state.lob} in ${state.state}, top 3:`,
-    recommendations.map(r => `${r.carrier} (${r.matchScore})`).join(', '));
+  console.log(`[Ranking] Rule-based ranked ${eligibleRanked.length} carriers for ${state.lob} in ${state.state}`);
+  console.log(`[Ranking] Top 5 scores:`, eligibleRanked.slice(0, 5).map(r =>
+    `${r.record.carrier_raw} (score=${r.score}, key=${r.record.carrier_key})`
+  ).join(', '));
+  console.log(`[Ranking] Top 3 recommendations:`, recommendations.map(r => `${r.carrier} (${r.matchScore})`).join(', '));
 
-  if (exclusions.length > 0) {
-    console.log(`[Ranking] Excluded carriers:`, exclusions);
+  // Debug: Check if expected high-rank carriers exist in eligibleCarriers
+  const expectedHighRank = STATE_LOB_RANKINGS[stateUpper]?.[lobLower];
+  if (expectedHighRank) {
+    const expectedNames = Object.keys(expectedHighRank);
+    const foundExpected = state.eligibleCarriers.filter(c =>
+      expectedNames.some(name =>
+        normalize(c.carrier_key).includes(name) || name.includes(normalize(c.carrier_key))
+      )
+    );
+    if (foundExpected.length === 0) {
+      console.warn(`[Ranking] WARNING: None of the state-LOB expected carriers found!`,
+        `Expected: ${expectedNames.join(', ')}`,
+        `Available: ${state.eligibleCarriers.slice(0, 10).map(c => c.carrier_key).join(', ')}...`
+      );
+    } else {
+      console.log(`[Ranking] Found ${foundExpected.length} expected carriers:`,
+        foundExpected.map(c => c.carrier_key).join(', ')
+      );
+    }
+  }
+
+  // === AI ENHANCEMENT: Generate better insights for the top carriers ===
+  let enhancedRecommendations = recommendations;
+  let marketInsights = '';
+
+  try {
+    console.log(`[Ranking] Enhancing top ${recommendations.length} carriers with AI...`);
+    const aiEnhanced = await aiEnhanceRanking(
+      recommendations,
+      top3.map(item => item.record),
+      {
+        state: state.state,
+        lob: state.lob,
+        coverage: state.coverage,
+        riskFactors: state.riskFactors || [],
+      }
+    );
+
+    if (aiEnhanced.recommendations && aiEnhanced.recommendations.length > 0) {
+      enhancedRecommendations = aiEnhanced.recommendations;
+    }
+    if (aiEnhanced.marketInsights) {
+      marketInsights = aiEnhanced.marketInsights;
+    }
+    if (aiEnhanced.warnings && aiEnhanced.warnings.length > 0) {
+      warnings.push(...aiEnhanced.warnings);
+    }
+
+    console.log(`[Ranking] AI enhancement complete`);
+  } catch (error) {
+    console.error('[Ranking] AI enhancement failed, using rule-based results:', error);
+    // Continue with rule-based recommendations
   }
 
   return {
-    rankedCarriers: recommendations,
-    recommendations,
+    rankedCarriers: enhancedRecommendations,
+    recommendations: enhancedRecommendations,
+    marketInsights,
     totalEligibleCount: eligibleRanked.length,
     confidence: parseFloat(confidence.toFixed(2)),
     exclusions: [...state.exclusions, ...exclusions],

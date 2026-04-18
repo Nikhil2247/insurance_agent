@@ -37,6 +37,7 @@ export interface AgentState {
   lobKeys: string[];    // Normalized LOB keys for data lookup
   coverage: number;     // e.g., 400000
   queryIntent: 'search' | 'followup' | 'general';
+  riskFactors: string[];  // AI-detected risk factors (e.g., "high-value", "coastal")
 
   // Carrier data (from carrierSearch tool) - TARGETED records only
   targetedRecords: CarrierAppetiteRecord[];  // Only relevant records for this LOB
@@ -75,6 +76,7 @@ export const initialState: AgentState = {
   lobKeys: [],
   coverage: 0,
   queryIntent: 'search',
+  riskFactors: [],
 
   targetedRecords: [],
   eligibleCarriers: [],
