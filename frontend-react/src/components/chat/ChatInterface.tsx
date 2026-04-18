@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Settings2, MessageSquare, LogOut, Menu, Database, FileDown } from 'lucide-react';
+import { Settings2, MessageSquare, LogOut, Menu, FileDown } from 'lucide-react';
 import { exportChatToPDF } from '@/services/pdfExport';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ChatMessage } from './ChatMessage';
@@ -17,8 +17,12 @@ import {
   deleteChat,
   generateTitle
 } from '@/services/chatService';
-import { chat as aiChat, initializeAgent, getDataStats } from '@/services/aiAgent';
+import { initializeAgent } from '@/services/aiAgent';
+import { runInsuranceAgent, InsuranceAgentResult, initializeLangGraphAgent } from '@/services/langgraph';
 import { generateId } from '@/lib/utils';
+
+// Toggle between LangGraph and legacy AI agent
+const USE_LANGGRAPH = true;
 
 interface ChatItem {
   id: string;
@@ -27,20 +31,102 @@ interface ChatItem {
   updatedAt: string;
 }
 
-// Parse JSON from response text
+// Convert LangGraph result to AnalysisData format for UI compatibility
+function langGraphToAnalysisData(result: InsuranceAgentResult): { summary: string; analysisData: AnalysisData | null } {
+  if (result.escalate) {
+    return {
+      summary: `⚠️ **Escalation Required**\n\n${result.escalationReason || 'This request requires manual review.'}`,
+      analysisData: null
+    };
+  }
+
+  // For follow-up queries (carrier details), just show the market insights directly
+  if (result.queryIntent === 'followup') {
+    return {
+      summary: result.marketInsights || 'Here are the details for your selected carrier.',
+      analysisData: null // No recommendation cards for follow-up responses
+    };
+  }
+
+  const summary = `Found **${result.totalEligibleCarriers}** eligible carriers for **${result.request.lob}** in **${result.request.state}**${result.request.coverage ? ` with **$${result.request.coverage.toLocaleString()}** coverage` : ''}. Here are the top ${result.recommendations.length} recommendations.`;
+
+  const analysisData: AnalysisData = {
+    request: result.request,
+    totalCandidates: result.totalEligibleCarriers,
+    recommendations: result.recommendations.map(rec => ({
+      rank: rec.rank,
+      carrier: rec.carrier,
+      matchScore: Math.round(rec.matchScore * 100), // Convert to percentage for UI
+      appetiteStatus: rec.appetiteStatus as any,
+      overview: rec.overview,
+      stateAnalysis: rec.stateAnalysis,
+      coverageAnalysis: rec.coverageAnalysis,
+      underwritingNotes: rec.underwritingNotes,
+      strengths: rec.strengths,
+      considerations: rec.considerations,
+      recommendation: rec.recommendation,
+    })),
+    excluded: result.exclusions.map(e => ({ carrier: e, reason: 'Excluded by rules' })),
+    marketInsights: result.marketInsights,
+  };
+
+  return { summary, analysisData };
+}
+
+// Parse JSON from response text (legacy - for non-LangGraph responses)
 function parseAnalysisData(responseText: string): { summary: string; analysisData: AnalysisData | null } {
   try {
-    const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/);
-    if (jsonMatch) {
-      const jsonStr = jsonMatch[1];
-      const analysisData = JSON.parse(jsonStr) as AnalysisData;
-      const summary = responseText.substring(0, responseText.indexOf('```json')).trim();
-      return { summary, analysisData };
+    // Find JSON object in the response (with or without code block markers)
+    const jsonStartIdx = responseText.indexOf('{"request"');
+    const altJsonStartIdx = responseText.indexOf('{\n  "request"');
+    const actualStart = jsonStartIdx !== -1 ? jsonStartIdx : altJsonStartIdx;
+
+    if (actualStart !== -1) {
+      // Find matching closing brace
+      let braceCount = 0;
+      let endIdx = -1;
+      for (let i = actualStart; i < responseText.length; i++) {
+        if (responseText[i] === '{') braceCount++;
+        if (responseText[i] === '}') braceCount--;
+        if (braceCount === 0) {
+          endIdx = i;
+          break;
+        }
+      }
+
+      if (endIdx !== -1) {
+        const jsonStr = responseText.substring(actualStart, endIdx + 1);
+        const analysisData = JSON.parse(jsonStr) as AnalysisData;
+
+        if (analysisData && analysisData.recommendations) {
+          // Extract summary (text before JSON, excluding code block markers)
+          let summary = responseText.substring(0, actualStart).trim();
+          summary = summary.replace(/```json\s*$/i, '').replace(/```\s*$/i, '').trim();
+
+          // If summary is empty, create a default one
+          if (!summary) {
+            const state = analysisData.request?.state || '';
+            const lob = analysisData.request?.lob || '';
+            summary = `Found ${analysisData.recommendations.length} carrier options for ${lob} in ${state}.`;
+          }
+
+          console.log('Parsed', analysisData.recommendations.length, 'recommendations');
+          return { summary, analysisData };
+        }
+      }
     }
   } catch (e) {
     console.error('Failed to parse analysis data:', e);
   }
-  return { summary: responseText, analysisData: null };
+
+  // If no JSON found, clean any partial JSON from response
+  let cleanedResponse = responseText;
+  const partialJsonIdx = cleanedResponse.indexOf('{"request"');
+  if (partialJsonIdx !== -1) {
+    cleanedResponse = cleanedResponse.substring(0, partialJsonIdx).trim();
+  }
+
+  return { summary: cleanedResponse || responseText, analysisData: null };
 }
 
 export function ChatInterface() {
@@ -73,19 +159,41 @@ export function ChatInterface() {
 
   const initAgent = async () => {
     try {
-      await initializeAgent();
-      const dataStats = getDataStats();
-      setStats({
-        carriers: dataStats.totalCarriers,
-        lobs: dataStats.totalLobs,
-        records: dataStats.totalRecords,
-        rules: dataStats.totalRules,
-        loadedFromDB: dataStats.loadedFromDB
-      });
-      setAgentReady(true);
+      if (USE_LANGGRAPH) {
+        // Use LangGraph agent with indexed data
+        const result = await initializeLangGraphAgent();
+        if (result.stats) {
+          setStats({
+            carriers: result.stats.totalCarriers,
+            lobs: result.stats.totalLobs,
+            records: result.stats.totalCarriers, // Use carriers as proxy for records
+            rules: result.stats.totalRules,
+            loadedFromDB: result.stats.dataSource === 'firebase',
+            dataSource: result.stats.dataSource,
+          });
+        } else {
+          setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false, dataSource: 'none' });
+        }
+        setAgentReady(result.ready);
+      } else {
+        // Legacy AI agent
+        const result = await initializeAgent();
+        if (result.stats) {
+          setStats({
+            carriers: result.stats.totalCarriers,
+            lobs: result.stats.totalCoverageTypes,
+            records: result.stats.totalAppetiteRecords,
+            rules: 0,
+            loadedFromDB: true
+          });
+        } else {
+          setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false });
+        }
+        setAgentReady(result.ready);
+      }
     } catch (error) {
       console.error('Failed to initialize agent:', error);
-      setStats({ carriers: 177, lobs: 459, records: 13637, rules: 855, loadedFromDB: false });
+      setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false });
       setAgentReady(true);
     }
   };
@@ -231,16 +339,52 @@ export function ChatInterface() {
     setIsLoading(true);
 
     try {
-      // Get chat history for context
-      const history = messages.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content
-      }));
+      let summary: string;
+      let analysisData: AnalysisData | null = null;
 
-      // Call AI agent
-      const result = await aiChat(content, history);
+      if (USE_LANGGRAPH) {
+        // === LangGraph Multi-Tool Agent ===
+        console.log('=== ChatInterface: Using LangGraph Agent ===');
+        console.log('User content:', content);
 
-      const { summary, analysisData } = parseAnalysisData(result.response);
+        const result = await runInsuranceAgent(content);
+
+        console.log('=== ChatInterface: LangGraph Result ===');
+        console.log('Total eligible:', result.totalEligibleCarriers);
+        console.log('Recommendations:', result.recommendations.length);
+        console.log('Escalate:', result.escalate);
+
+        const parsed = langGraphToAnalysisData(result);
+        summary = parsed.summary;
+        analysisData = parsed.analysisData;
+
+        // Add warnings and market insights only for search queries (not follow-ups)
+        if (result.queryIntent !== 'followup') {
+          // Add warnings to summary if any
+          if (result.warnings.length > 0 && !result.escalate) {
+            summary += `\n\n> ⚠️ ${result.warnings.join(' | ')}`;
+          }
+
+          // Add market insights
+          if (result.marketInsights && !result.escalate) {
+            summary += `\n\n**Market Insights:** ${result.marketInsights}`;
+          }
+        }
+      } else {
+        // === Legacy AI Agent (LLM-based) ===
+        const history = messages.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content
+        }));
+
+        console.log('=== ChatInterface: Using Legacy AI Agent ===');
+        const { chat: aiChat } = await import('@/services/aiAgent');
+        const result = await aiChat(content, history);
+
+        const parsed = parseAnalysisData(result.response);
+        summary = parsed.summary;
+        analysisData = parsed.analysisData;
+      }
 
       const assistantMessage: Message = {
         id: generateId(),
@@ -254,7 +398,7 @@ export function ChatInterface() {
       try {
         await addMessageToChat(chatId, {
           role: 'assistant',
-          content: result.response,
+          content: summary,
           analysisData: analysisData,
           timestamp: new Date()
         });
@@ -326,7 +470,7 @@ export function ChatInterface() {
                   <p className="text-xs text-gray-500 truncate">
                     {stats.carriers} carriers · {stats.records.toLocaleString()} records
                     {!agentReady && ' · Loading data...'}
-                    {agentReady && stats.loadedFromDB && ' · DB'}
+                    {agentReady && stats.dataSource === 'firebase' && ' · Firebase'}
                   </p>
                 )}
               </div>
@@ -344,13 +488,6 @@ export function ChatInterface() {
                   <FileDown className="w-4 h-4" />
                 </button>
               )}
-              <a
-                href="#/admin"
-                className="p-2 text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100 hidden sm:flex"
-                title="Database Admin"
-              >
-                <Database className="w-4 h-4" />
-              </a>
               <button
                 onClick={logout}
                 className="p-2 text-gray-600 hover:text-gray-900 rounded-lg hover:bg-gray-100"

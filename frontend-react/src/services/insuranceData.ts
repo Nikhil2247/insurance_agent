@@ -60,23 +60,54 @@ const insuranceData: InsuranceData = {
 const CACHE_KEY = 'insurance_data_cache';
 const CACHE_EXPIRY_KEY = 'insurance_data_cache_expiry';
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+const DATABASE_MODE_PAUSED = import.meta.env.VITE_DATABASE_MODE !== 'enabled';
+const CARRIER_APPETITE_CSV_PATH = import.meta.env.VITE_CARRIER_APPETITE_CSV_PATH || '/data/carrier_appetite.csv';
 
 // LOB column mappings from the CSV headers
 const lobColumnMappings: Record<string, string[]> = {
-  'Homeowners': ['Home', 'HO3', 'Condo', 'Dwelling Fire', 'High Net Worth Client'],
-  'Auto': ['Auto', 'Auto Home Combo Policy', 'Classic Boats', 'Collector Cars', 'Mexico Auto', 'Motorcycle'],
-  'Umbrella': ['Umbrella', 'Excess Liability'],
-  'Flood': ['Flood'],
+  // Home/Property
+  'Homeowners': ['Home', 'HO3', 'High Net Worth Client', 'City Living'],
+  'Condo': ['Condo'],
   'Renters': ['Renters HO4'],
-  'Landlord': ['Landlord/DP3'],
+  'Landlord': ['Landlord/DP3', 'Dwelling Fire'],
   'Manufactured Home': ['Manufactured Homes', 'Tiny Homes', 'Barndominium'],
-  'Boat': ['Boat', 'Yachts', 'Classic Boats'],
-  'RV': ['RV Insurance', 'Travel Trailer', 'Rental RV, Camper, Trailer, MC'],
-  'Jewelry': ['Jewelry Floater', 'Collections', 'Personal Article Floater'],
-  'Short Term Rental': ['Airbnb', 'VRBO', 'Short Term Rentals'],
+
+  // Auto
+  'Auto': ['Auto', 'Auto Home Combo Policy', 'Mexico Auto', 'Packaged Polices Auto & Home'],
+  'Motorcycle': ['Motorcycle'],
+  'Collector Cars': ['Collector Cars', 'Classic Boats'],
+
+  // Umbrella/Liability
+  'Umbrella': ['Umbrella', 'Excess Liability'],
+
+  // Water/Natural Disaster
+  'Flood': ['Flood'],
   'Earthquake': ['Earthquake', 'Earthquake Deductible Buyback'],
+
+  // Watercraft
+  'Boat': ['Boat', 'Classic Boats'],
+  'Yachts': ['Yachts'],
+
+  // Recreational
+  'RV': ['RV Insurance', 'Travel Trailer', 'Rental RV, Camper, Trailer, MC'],
+  'ATV': ['ATV/UTV', 'Golf Carts', 'Snowmobile'],
+
+  // Valuables
+  'Jewelry Floater': ['Jewelry Floater', 'Collections', 'Personal Article Floater'],
+
+  // Short Term Rental
+  'Short Term Rental': ['Airbnb', 'VRBO', 'Short Term Rentals'],
+
+  // Other Personal
   'Travel': ['Travel'],
   'Pet': ['Pet Insurance'],
+
+  // Commercial
+  'BOP': ['Packaged Polices Auto & Home'], // Business Owners Policy
+  'Commercial Auto': ['Auto'], // Will need commercial-specific data
+  'Workers Compensation': [], // Will need commercial data
+  'Commercial Property': [], // Will need commercial data
+  'General Liability': [], // Will need commercial data
   'Cyber': ['Cyber'],
   'Professional Liability': ['Professional Liability']
 };
@@ -94,7 +125,19 @@ function loadFromCache(): boolean {
 
     const data = JSON.parse(cached);
 
-    insuranceData.carriers = new Map(data.carriers);
+    // Reconstruct carriers with proper Map for coverages
+    insuranceData.carriers = new Map();
+    for (const [name, carrierData] of data.carriers) {
+      const carrierInfo: CarrierInfo = {
+        carrier: carrierData.carrier,
+        statesOperatingIn: carrierData.statesOperatingIn,
+        knownFor: carrierData.knownFor,
+        directOrWholesaler: carrierData.directOrWholesaler,
+        coverages: new Map(carrierData.coverages || [])
+      };
+      insuranceData.carriers.set(name, carrierInfo);
+    }
+
     insuranceData.appetiteRecords = data.appetiteRecords;
     insuranceData.allCarriers = new Set(data.allCarriers);
     insuranceData.allStates = new Set(data.allStates);
@@ -113,8 +156,20 @@ function loadFromCache(): boolean {
 // Save to local storage cache
 function saveToCache(): void {
   try {
+    // Convert carriers with nested coverages Map to serializable format
+    const carriersArray: [string, any][] = [];
+    for (const [name, info] of insuranceData.carriers) {
+      carriersArray.push([name, {
+        carrier: info.carrier,
+        statesOperatingIn: info.statesOperatingIn,
+        knownFor: info.knownFor,
+        directOrWholesaler: info.directOrWholesaler,
+        coverages: info.coverages instanceof Map ? Array.from(info.coverages.entries()) : []
+      }]);
+    }
+
     const data = {
-      carriers: Array.from(insuranceData.carriers.entries()),
+      carriers: carriersArray,
       appetiteRecords: insuranceData.appetiteRecords,
       allCarriers: Array.from(insuranceData.allCarriers),
       allStates: Array.from(insuranceData.allStates),
@@ -256,7 +311,7 @@ async function loadCSV(url: string): Promise<any[]> {
 async function loadFromCSV(): Promise<void> {
   console.log('Loading data from CSV...');
 
-  const rawData = await loadCSV('/data/carrier_appetite.csv');
+  const rawData = await loadCSV(CARRIER_APPETITE_CSV_PATH);
 
   // Find the header row (contains "CARRIERS")
   let headerRowIndex = -1;
@@ -369,10 +424,12 @@ export async function loadInsuranceData(): Promise<void> {
     return;
   }
 
-  // Try database
-  const loadedFromDB = await loadFromDatabase();
-  if (loadedFromDB) {
-    return;
+  // DB path remains available and is controlled by VITE_DATABASE_MODE.
+  if (!DATABASE_MODE_PAUSED) {
+    const loadedFromDB = await loadFromDatabase();
+    if (loadedFromDB) {
+      return;
+    }
   }
 
   // Fallback to CSV
@@ -381,6 +438,10 @@ export async function loadInsuranceData(): Promise<void> {
 
 // Force reload from database
 export async function reloadFromDatabase(): Promise<boolean> {
+  if (DATABASE_MODE_PAUSED) {
+    return false;
+  }
+
   clearCache();
   insuranceData.loaded = false;
   return await loadFromDatabase();
@@ -404,6 +465,14 @@ export async function seedDatabase(): Promise<{
   appetitesCount: number;
   coverageTypesCount: number;
 }> {
+  if (DATABASE_MODE_PAUSED) {
+    return {
+      carriersCount: 0,
+      appetitesCount: 0,
+      coverageTypesCount: 0,
+    };
+  }
+
   const result = await seedDatabaseFromCSV();
   clearCache();
   await loadFromDatabase();
@@ -522,12 +591,14 @@ export function getCarrierCoverageDetails(carrierName: string, lob: string): str
   details.push(`Known For: ${carrier.knownFor}`);
   details.push(`Type: ${carrier.directOrWholesaler}`);
 
-  // Get specific coverage info
-  for (const [coverage, value] of carrier.coverages) {
-    if (value && value.toLowerCase() !== 'no' && value.trim().length > 0) {
-      if (coverage.toLowerCase().includes(lob.toLowerCase()) ||
-          lob.toLowerCase().includes(coverage.toLowerCase().split(' ')[0])) {
-        details.push(`${coverage}: ${value}`);
+  // Get specific coverage info - check if coverages exists and is a Map
+  if (carrier.coverages && carrier.coverages instanceof Map) {
+    for (const [coverage, value] of carrier.coverages) {
+      if (value && value.toLowerCase() !== 'no' && value.trim().length > 0) {
+        if (coverage.toLowerCase().includes(lob.toLowerCase()) ||
+            lob.toLowerCase().includes(coverage.toLowerCase().split(' ')[0])) {
+          details.push(`${coverage}: ${value}`);
+        }
       }
     }
   }
@@ -538,4 +609,12 @@ export function getCarrierCoverageDetails(carrierName: string, lob: string): str
 // Check if loaded from database
 export function isLoadedFromDatabase(): boolean {
   return insuranceData.loadedFromDB;
+}
+
+export function isDatabaseModePaused(): boolean {
+  return DATABASE_MODE_PAUSED;
+}
+
+export function getCarrierAppetiteCsvPath(): string {
+  return CARRIER_APPETITE_CSV_PATH;
 }

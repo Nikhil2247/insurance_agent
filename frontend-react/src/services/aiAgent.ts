@@ -1,10 +1,8 @@
 import {
   loadInsuranceData,
-  searchCarriers,
   getDataStats,
-  getCarrierCoverageDetails,
-  AppetiteRecord
 } from './insuranceData';
+import { routeAndExecuteTools } from './queryToolRouter';
 
 const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY;
 const LLM_MODEL = import.meta.env.VITE_LLM_MODEL || 'google/gemini-2.0-flash-001';
@@ -20,6 +18,14 @@ interface AnalysisResult {
 }
 
 const SYSTEM_PROMPT = `You are an expert insurance placement advisor AI assistant for Chambers Bay Insurance Group. You help insurance brokers find the right carriers for their clients.
+
+## CRITICAL CONSTRAINT - CARRIER SELECTION
+**YOU MUST ONLY RECOMMEND CARRIERS FROM THE "TOP_3_CARRIERS" LIST PROVIDED IN THE TOOL OUTPUT.**
+- NEVER invent or suggest carriers not in the TOP_3_CARRIERS list
+- ALWAYS follow the ranked order from the tool output (highest score first)
+- Use the EXACT score values provided by the tool (as decimals like 0.79)
+- Maximum 3 recommendations - NEVER more than 3
+- If no carriers found or LOB unknown - ESCALATE, don't recommend
 
 ## RESPONSE FORMAT RULES
 
@@ -37,12 +43,13 @@ Provide a brief summary, then output a JSON block with CONCISE recommendations.
     "lob": "Homeowners",
     "coverage": 400000
   },
-  "totalCandidates": 5,
+  "totalCandidates": 64,
+  "escalate": false,
   "recommendations": [
     {
       "rank": 1,
-      "carrier": "EXACT CARRIER NAME FROM DATA",
-      "matchScore": 92,
+      "carrier": "EXACT CARRIER NAME FROM TOP_3_CARRIERS",
+      "matchScore": 0.79,
       "appetiteStatus": "Strong Appetite",
       "overview": "1 sentence why this carrier fits.",
       "stateAnalysis": {
@@ -64,7 +71,20 @@ Provide a brief summary, then output a JSON block with CONCISE recommendations.
 }
 \`\`\`
 
+### For ESCALATION (unknown LOB or no carriers):
+\`\`\`json
+{
+  "request": { "state": "TX", "lob": "Unknown LOB", "coverage": 0 },
+  "totalCandidates": 0,
+  "escalate": true,
+  "escalationReason": "Line of business not found. Routing to placement desk for manual handling.",
+  "recommendations": []
+}
+\`\`\`
+
 **IMPORTANT FOR INITIAL CARDS:**
+- ONLY use carriers from TOP_3_CARRIERS list - MAXIMUM 3 recommendations
+- Use matchScore as decimals (0.79, not 79 or 79%)
 - Keep each field VERY SHORT (1 sentence max)
 - Total card content should be ~100 words
 - strengths: 2 items max, 3-5 words each
@@ -103,21 +123,21 @@ DO NOT output JSON. Instead, provide a CONCISE detailed response (300-400 words 
 ---
 
 ## CRITICAL RULES:
-1. Use EXACT carrier names from the provided data (e.g., "Allstate", "American Modern", "Aegis")
-2. matchScore must be 0-100
+1. **ONLY USE CARRIERS FROM TOP_3_CARRIERS LIST** - This is mandatory, MAXIMUM 3
+2. Use EXACT matchScore values from tool output AS DECIMALS (0.79 not 79)
 3. appetiteStatus: "Strong Appetite", "Moderate Appetite", "Limited Appetite", or "Conditional"
-4. For INITIAL queries: Keep card content BRIEF (~100 words per card)
-5. For FOLLOW-UPS: Keep responses CONCISE (300-400 words max)
-6. Use tables and bullet points for readability
-7. **BOLD important terms** using **markdown bold syntax** - bold key information like:
+4. Rank by matchScore descending (highest score = rank 1)
+5. For INITIAL queries: Keep card content BRIEF (~100 words per card)
+6. For FOLLOW-UPS: Keep responses CONCISE (300-400 words max)
+7. If zero carriers or unknown LOB: SET escalate: true, DO NOT recommend
+8. **BOLD important terms** using **markdown bold syntax**:
    - Coverage amounts (e.g., **$500,000**)
    - Important limits (e.g., **minimum $300k underlying**)
    - Key requirements (e.g., **3+ years claims-free**)
    - Carrier names when mentioned in text
    - Critical warnings or notes
    - Percentages and discounts (e.g., **15% multi-policy discount**)
-   - Policy types (e.g., **HO-3**, **HO-5**)
-   - Important dates or timeframes`;
+   - Policy types (e.g., **HO-3**, **HO-5**)`;
 
 // Parse state and LOB from user message
 function parseSearchCriteria(message: string): { state: string; lob: string; coverage: number; isFollowUp: boolean; selectedCarrier: string } {
@@ -148,49 +168,73 @@ function parseSearchCriteria(message: string): { state: string; lob: string; cov
 
   // Common state abbreviations and names
   const statePatterns: [RegExp, string][] = [
-    [/\b(al|alabama)\b/i, 'AL'], [/\b(ak|alaska)\b/i, 'AK'], [/\b(az|arizona)\b/i, 'AZ'], [/\b(ar|arkansas)\b/i, 'AR'],
-    [/\b(ca|california)\b/i, 'CA'], [/\b(co|colorado)\b/i, 'CO'], [/\b(ct|connecticut)\b/i, 'CT'], [/\b(de|delaware)\b/i, 'DE'],
-    [/\b(fl|florida)\b/i, 'FL'], [/\b(ga|georgia)\b/i, 'GA'], [/\b(hi|hawaii)\b/i, 'HI'], [/\b(id|idaho)\b/i, 'ID'],
-    [/\b(il|illinois)\b/i, 'IL'], [/\b(in|indiana)\b/i, 'IN'], [/\b(ia|iowa)\b/i, 'IA'], [/\b(ks|kansas)\b/i, 'KS'],
-    [/\b(ky|kentucky)\b/i, 'KY'], [/\b(la|louisiana)\b/i, 'LA'], [/\b(me|maine)\b/i, 'ME'], [/\b(md|maryland)\b/i, 'MD'],
-    [/\b(ma|massachusetts)\b/i, 'MA'], [/\b(mi|michigan)\b/i, 'MI'], [/\b(mn|minnesota)\b/i, 'MN'], [/\b(ms|mississippi)\b/i, 'MS'],
-    [/\b(mo|missouri)\b/i, 'MO'], [/\b(mt|montana)\b/i, 'MT'], [/\b(ne|nebraska)\b/i, 'NE'], [/\b(nv|nevada)\b/i, 'NV'],
-    [/\b(nh|new hampshire)\b/i, 'NH'], [/\b(nj|new jersey)\b/i, 'NJ'], [/\b(nm|new mexico)\b/i, 'NM'], [/\b(ny|new york)\b/i, 'NY'],
-    [/\b(nc|north carolina)\b/i, 'NC'], [/\b(nd|north dakota)\b/i, 'ND'], [/\b(oh|ohio)\b/i, 'OH'], [/\b(ok|oklahoma)\b/i, 'OK'],
-    [/\b(or|oregon)\b/i, 'OR'], [/\b(pa|pennsylvania)\b/i, 'PA'], [/\b(ri|rhode island)\b/i, 'RI'], [/\b(sc|south carolina)\b/i, 'SC'],
-    [/\b(sd|south dakota)\b/i, 'SD'], [/\b(tn|tennessee)\b/i, 'TN'], [/\b(tx|texas)\b/i, 'TX'], [/\b(ut|utah)\b/i, 'UT'],
-    [/\b(vt|vermont)\b/i, 'VT'], [/\b(va|virginia)\b/i, 'VA'], [/\b(wa|washington)\b/i, 'WA'], [/\b(wv|west virginia)\b/i, 'WV'],
-    [/\b(wi|wisconsin)\b/i, 'WI'], [/\b(wy|wyoming)\b/i, 'WY']
+    [/\b(alabama)\b/i, 'AL'], [/\b(alaska)\b/i, 'AK'], [/\b(arizona)\b/i, 'AZ'], [/\b(arkansas)\b/i, 'AR'],
+    [/\b(california)\b/i, 'CA'], [/\b(colorado)\b/i, 'CO'], [/\b(connecticut)\b/i, 'CT'], [/\b(delaware)\b/i, 'DE'],
+    [/\b(florida)\b/i, 'FL'], [/\b(georgia)\b/i, 'GA'], [/\b(hawaii)\b/i, 'HI'], [/\b(idaho)\b/i, 'ID'],
+    [/\b(illinois)\b/i, 'IL'], [/\b(indiana)\b/i, 'IN'], [/\b(iowa)\b/i, 'IA'], [/\b(kansas)\b/i, 'KS'],
+    [/\b(kentucky)\b/i, 'KY'], [/\b(louisiana)\b/i, 'LA'], [/\b(maine)\b/i, 'ME'], [/\b(maryland)\b/i, 'MD'],
+    [/\b(massachusetts)\b/i, 'MA'], [/\b(michigan)\b/i, 'MI'], [/\b(minnesota)\b/i, 'MN'], [/\b(mississippi)\b/i, 'MS'],
+    [/\b(missouri)\b/i, 'MO'], [/\b(montana)\b/i, 'MT'], [/\b(nebraska)\b/i, 'NE'], [/\b(nevada)\b/i, 'NV'],
+    [/\b(new hampshire)\b/i, 'NH'], [/\b(new jersey)\b/i, 'NJ'], [/\b(new mexico)\b/i, 'NM'], [/\b(new york)\b/i, 'NY'],
+    [/\b(north carolina)\b/i, 'NC'], [/\b(north dakota)\b/i, 'ND'], [/\b(ohio)\b/i, 'OH'], [/\b(oklahoma)\b/i, 'OK'],
+    [/\b(oregon)\b/i, 'OR'], [/\b(pennsylvania)\b/i, 'PA'], [/\b(rhode island)\b/i, 'RI'], [/\b(south carolina)\b/i, 'SC'],
+    [/\b(south dakota)\b/i, 'SD'], [/\b(tennessee)\b/i, 'TN'], [/\b(texas)\b/i, 'TX'], [/\b(utah)\b/i, 'UT'],
+    [/\b(vermont)\b/i, 'VT'], [/\b(virginia)\b/i, 'VA'], [/\b(washington)\b/i, 'WA'], [/\b(west virginia)\b/i, 'WV'],
+    [/\b(wisconsin)\b/i, 'WI'], [/\b(wyoming)\b/i, 'WY'],
+    // State abbreviations - case sensitive
+    [/\bAL\b/, 'AL'], [/\bAK\b/, 'AK'], [/\bAZ\b/, 'AZ'], [/\bAR\b/, 'AR'],
+    [/\bCA\b/, 'CA'], [/\bCO\b/, 'CO'], [/\bCT\b/, 'CT'], [/\bDE\b/, 'DE'],
+    [/\bFL\b/, 'FL'], [/\bGA\b/, 'GA'], [/\bHI\b/, 'HI'], [/\bID\b/, 'ID'],
+    [/\bIL\b/, 'IL'], [/\bIA\b/, 'IA'], [/\bKS\b/, 'KS'], [/\bKY\b/, 'KY'],
+    [/\bLA\b/, 'LA'], [/\bMD\b/, 'MD'], [/\bMA\b/, 'MA'], [/\bMI\b/, 'MI'],
+    [/\bMN\b/, 'MN'], [/\bMS\b/, 'MS'], [/\bMO\b/, 'MO'], [/\bMT\b/, 'MT'],
+    [/\bNE\b/, 'NE'], [/\bNV\b/, 'NV'], [/\bNH\b/, 'NH'], [/\bNJ\b/, 'NJ'],
+    [/\bNM\b/, 'NM'], [/\bNY\b/, 'NY'], [/\bNC\b/, 'NC'], [/\bND\b/, 'ND'],
+    [/\bOH\b/, 'OH'], [/\bOK\b/, 'OK'], [/\bPA\b/, 'PA'], [/\bRI\b/, 'RI'],
+    [/\bSC\b/, 'SC'], [/\bSD\b/, 'SD'], [/\bTN\b/, 'TN'], [/\bTX\b/, 'TX'],
+    [/\bUT\b/, 'UT'], [/\bVT\b/, 'VT'], [/\bVA\b/, 'VA'], [/\bWA\b/, 'WA'],
+    [/\bWV\b/, 'WV'], [/\bWI\b/, 'WI'], [/\bWY\b/, 'WY']
   ];
 
   // Common LOB keywords mapped to standard names
   const lobMappings: [string[], string][] = [
-    [['home insurance', 'homeowners', 'homeowner', 'home', 'dwelling', 'residential'], 'Homeowners'],
-    [['general liability', 'gl'], 'General Liability'],
-    [['commercial auto', 'business auto'], 'Commercial Auto'],
-    [['workers comp', 'workers compensation', 'work comp'], 'Workers Compensation'],
-    [['commercial property', 'property'], 'Commercial Property'],
-    [['bop', 'business owners', 'business owner policy'], 'Business Owners Policy'],
+    // Home/Dwelling - order matters, more specific first
+    [['dwelling fire', 'dwelling policy', 'tenant-occupied', 'tenant occupied'], 'Landlord'],
+    [['home insurance', 'homeowners', 'homeowner', 'home policy', 'owner-occupied', 'owner occupied'], 'Homeowners'],
+    [['landlord', 'dp3', 'dp-3', 'rental property', 'investment property'], 'Landlord'],
+    [['condo', 'condominium', 'unit owner', 'ho6', 'ho-6'], 'Condo'],
+    [['renters', 'renter', 'ho4', 'ho-4', 'tenant insurance'], 'Renters'],
+    [['manufactured home', 'mobile home', 'modular home'], 'Manufactured Home'],
+
+    // Auto
+    [['personal auto', 'auto insurance', 'car insurance', 'vehicle insurance'], 'Auto'],
+    [['commercial auto', 'business auto', 'fleet'], 'Commercial Auto'],
+    [['classic car', 'collector car', 'antique car', 'vintage car'], 'Collector Cars'],
+    [['motorcycle', 'motorbike'], 'Motorcycle'],
+
+    // Commercial
+    [['bop', 'business owners policy', 'business owners', 'business owner policy', 'packaged'], 'BOP'],
+    [['general liability', 'gl', 'liability insurance'], 'General Liability'],
+    [['workers comp', 'workers compensation', 'work comp', 'workman comp'], 'Workers Compensation'],
+    [['commercial property', 'business property'], 'Commercial Property'],
     [['professional liability', 'pl', 'professional'], 'Professional Liability'],
-    [['cyber', 'cyber liability', 'cyber insurance'], 'Cyber Liability'],
-    [['umbrella', 'excess liability', 'excess'], 'Umbrella'],
-    [['epli', 'employment practices', 'employment'], 'Employment Practices Liability'],
-    [['d&o', 'directors and officers', 'directors'], 'Directors & Officers'],
-    [['e&o', 'errors and omissions'], 'Errors & Omissions'],
-    [['inland marine', 'marine'], 'Inland Marine'],
-    [['auto insurance', 'auto', 'car insurance'], 'Auto'],
-    [['trucking', 'truck', 'commercial trucking'], 'Trucking'],
-    [['contractors', 'contractor'], 'Contractors'],
-    [['restaurant', 'restaurants'], 'Restaurant'],
-    [['retail', 'store'], 'Retail'],
-    [['manufacturing', 'manufacturer'], 'Manufacturing'],
-    [['flood'], 'Flood'],
-    [['renters', 'renter'], 'Renters'],
-    [['condo'], 'Condo'],
-    [['landlord', 'dp3', 'rental property'], 'Landlord'],
-    [['boat', 'watercraft'], 'Boat'],
-    [['rv', 'recreational vehicle', 'motorhome'], 'RV'],
-    [['motorcycle'], 'Motorcycle']
+    [['cyber', 'cyber liability', 'cyber insurance', 'data breach'], 'Cyber'],
+
+    // Umbrella/Excess
+    [['umbrella', 'excess liability', 'excess', 'personal umbrella'], 'Umbrella'],
+
+    // Specialty
+    [['flood', 'flood insurance', 'flood coverage'], 'Flood'],
+    [['earthquake', 'quake'], 'Earthquake'],
+    [['boat', 'watercraft', 'marine', 'vessel'], 'Boat'],
+    [['yacht'], 'Yachts'],
+    [['rv', 'recreational vehicle', 'motorhome', 'camper'], 'RV'],
+    [['jewelry', 'jewelry floater', 'valuable articles', 'personal articles'], 'Jewelry Floater'],
+    [['travel', 'trip'], 'Travel'],
+    [['pet', 'pet insurance'], 'Pet'],
+
+    // Fallback for "home" without qualifiers
+    [['home'], 'Homeowners']
   ];
 
   let state = '';
@@ -225,41 +269,6 @@ function parseSearchCriteria(message: string): { state: string; lob: string; cov
   return { state, lob, coverage, isFollowUp: false, selectedCarrier: '' };
 }
 
-// Format carrier data for the AI
-function formatCarrierData(records: AppetiteRecord[], state: string, lob: string): string {
-  if (records.length === 0) {
-    return `No carriers found in database for ${lob} in ${state}. Use your knowledge of major insurance carriers to provide recommendations.`;
-  }
-
-  let formatted = `## Database Results: ${records.length} carriers for ${lob} in ${state}\n\n`;
-
-  records.forEach((record, index) => {
-    formatted += `### ${index + 1}. ${record.carrier}\n`;
-    formatted += `| Field | Value |\n|-------|-------|\n`;
-    formatted += `| States | ${record.statesOperatingIn || 'N/A'} |\n`;
-    formatted += `| Known For | ${record.knownFor || 'N/A'} |\n`;
-    formatted += `| Type | ${record.directOrWholesaler || 'N/A'} |\n`;
-    formatted += `| Appetite | ${record.appetite} |\n`;
-    if (record.details && record.details !== record.knownFor) {
-      formatted += `| Details | ${record.details} |\n`;
-    }
-
-    // Get additional coverage details
-    const extraDetails = getCarrierCoverageDetails(record.carrier, lob);
-    if (extraDetails) {
-      const lines = extraDetails.split('\n').filter(l =>
-        !l.startsWith('States:') && !l.startsWith('Known For:') && !l.startsWith('Type:')
-      );
-      if (lines.length > 0) {
-        formatted += `| Coverage Info | ${lines.join('; ')} |\n`;
-      }
-    }
-    formatted += '\n';
-  });
-
-  return formatted;
-}
-
 // Call OpenRouter API
 async function callLLM(messages: ChatMessage[]): Promise<string> {
   if (!OPENROUTER_API_KEY) {
@@ -278,7 +287,7 @@ async function callLLM(messages: ChatMessage[]): Promise<string> {
       model: LLM_MODEL,
       messages: messages,
       temperature: 0.7,
-      max_tokens: 800
+      max_tokens:4000, 
     })
   });
 
@@ -314,6 +323,9 @@ export async function chat(
     messages.push({ role: h.role, content: h.content });
   });
 
+  // Store tool result for validation later
+  let toolResult: Awaited<ReturnType<typeof routeAndExecuteTools>> | null = null;
+
   if (isFollowUp) {
     // This is a follow-up - user selected a carrier
     // Extract original context from history
@@ -340,27 +352,62 @@ Include briefly:
 - Next steps (3 numbered steps)`
     });
   } else {
-    // This is a new query - search for carriers
-    const carriers = searchCarriers(state, lob, 10);
-    const contextData = formatCarrierData(carriers, state, lob);
+    // This is a new query - route by intent and execute the right tools.
+    toolResult = await routeAndExecuteTools({
+      query: userMessage,
+      state,
+      lob,
+      limit: 10,
+      coverageAmount: coverage,
+    });
 
-    console.log('Found carriers:', carriers.length);
+    console.log('Tool routing:', toolResult.intent, toolResult.usedTools);
+
+    const totalEligible = toolResult.rankedCandidates.length;
+    const shouldEscalate = totalEligible === 0;
+
+    // Extract top 3 carriers for explicit instruction
+    const top3Carriers = toolResult.rankedCandidates.slice(0, 3);
+    const carrierSummary = top3Carriers.map((c, i) => {
+      const scoreDecimal = (c.matchScore / 100).toFixed(2);
+      return `${i + 1}. ${c.carrier} (score: ${scoreDecimal}, type: ${c.type}, knownFor: ${c.knownFor || 'N/A'})`;
+    }).join('\n');
+
+    // Build warnings
+    const warnings: string[] = [];
+    if (!state) warnings.push('State not specified - scores may be lower');
+    if (!coverage) warnings.push('Coverage amount not provided - some coverage-limit rules were not applied');
 
     messages.push({
       role: 'system',
-      content: `## User Request
-- **State:** ${state || 'Not specified'}
-- **Coverage Type:** ${lob || 'Not specified'}
-- **Coverage Amount:** ${coverage ? `$${coverage.toLocaleString()}` : 'Not specified'}
+      content: `## USER REQUEST
+- State: ${state || 'NOT SPECIFIED'}
+- Coverage Type: ${lob || 'NOT SPECIFIED'}
+- Coverage Amount: ${coverage ? `$${coverage.toLocaleString()}` : 'NOT SPECIFIED'}
 
-${contextData}
+## TOOL RESULTS
+- Total Eligible Carriers: ${totalEligible}
+- Escalate: ${shouldEscalate}
+${warnings.length > 0 ? `- Warnings: ${warnings.join('; ')}` : ''}
 
-## Instructions
-1. Use the carrier data above to make recommendations
-2. Use EXACT carrier names from the data (e.g., "Allstate", "American Modern", "Aegis")
-3. If database has limited results, you may supplement with major carriers you know operate in this market
-4. Provide 3 recommendations with all required fields
-5. Be specific and actionable`
+## TOP_3_CARRIERS (USE ONLY THESE - IN THIS EXACT ORDER):
+${shouldEscalate ? 'NONE - MUST ESCALATE' : carrierSummary}
+
+## STRICT INSTRUCTIONS
+${shouldEscalate ? `
+1. SET escalate: true
+2. SET escalationReason: "Line of business not found. Routing to placement desk for manual handling."
+3. DO NOT recommend any carriers
+4. SET recommendations: []
+` : `
+1. Recommend EXACTLY these 3 carriers in this order (or fewer if less available)
+2. Use carrier names EXACTLY as shown above
+3. Convert scores to decimals: divide by 100 (e.g., 79 → 0.79)
+4. Include knownFor in reasoning
+5. Set totalEligibleCarriers: ${totalEligible}
+6. Set escalate: false
+7. NEVER invent or add carriers not in TOP_3_CARRIERS list
+`}`
     });
   }
 
@@ -373,12 +420,17 @@ ${contextData}
 
   // Try to parse analysis data from response (only for non-follow-ups)
   let analysisData = null;
-  if (!isFollowUp) {
+  if (!isFollowUp && toolResult) {
     try {
       const jsonMatch = response.match(/```json\n([\s\S]*?)\n```/);
       if (jsonMatch) {
         analysisData = JSON.parse(jsonMatch[1]);
         console.log('Parsed analysis data with', analysisData?.recommendations?.length, 'recommendations');
+
+        // Validate and correct recommendations against tool output
+        if (analysisData?.recommendations && toolResult.rankedCandidates) {
+          analysisData = validateAndCorrectRecommendations(analysisData, toolResult.rankedCandidates);
+        }
       }
     } catch (e) {
       console.error('JSON parsing failed:', e);
@@ -391,11 +443,127 @@ ${contextData}
   };
 }
 
+// Validate and correct LLM recommendations against tool output
+function validateAndCorrectRecommendations(
+  analysisData: any,
+  rankedCandidates: Array<{
+    carrier: string;
+    matchScore: number;
+    appetiteStatus: string;
+    type: string;
+    statesOperatingIn: string;
+    knownFor: string;
+    rationale: string[];
+  }>
+): any {
+  // Handle escalation case
+  if (analysisData?.escalate === true || rankedCandidates?.length === 0) {
+    return {
+      ...analysisData,
+      escalate: true,
+      recommendations: [],
+      totalCandidates: 0
+    };
+  }
+
+  if (!analysisData?.recommendations) {
+    return analysisData;
+  }
+
+  const allowedCarriersMap = new Map(
+    rankedCandidates.map(c => [c.carrier.toLowerCase(), c])
+  );
+
+  // Filter out recommendations for carriers not in allowed list
+  const validRecommendations = analysisData.recommendations.filter((rec: any) => {
+    const carrierLower = (rec.carrier || '').toLowerCase();
+    return allowedCarriersMap.has(carrierLower);
+  });
+
+  // Correct scores and data from tool output
+  const correctedRecommendations = validRecommendations.map((rec: any) => {
+    const carrierLower = (rec.carrier || '').toLowerCase();
+    const toolData = allowedCarriersMap.get(carrierLower);
+
+    if (toolData) {
+      const scoreDecimal = toolData.matchScore / 100;
+      return {
+        ...rec,
+        carrier: toolData.carrier,
+        matchScore: parseFloat(scoreDecimal.toFixed(2)),
+        appetiteStatus: toolData.appetiteStatus,
+      };
+    }
+    return rec;
+  });
+
+  // Re-sort by matchScore (descending) and re-rank, limit to 3
+  correctedRecommendations.sort((a: any, b: any) => (b.matchScore || 0) - (a.matchScore || 0));
+  const top3 = correctedRecommendations.slice(0, 3);
+  top3.forEach((rec: any, idx: number) => {
+    rec.rank = idx + 1;
+  });
+
+  // If we filtered out all recommendations, use top 3 from tool output
+  if (top3.length === 0 && rankedCandidates.length > 0) {
+    console.warn('All LLM recommendations were invalid, using tool output directly');
+    return {
+      ...analysisData,
+      escalate: false,
+      totalCandidates: rankedCandidates.length,
+      recommendations: rankedCandidates.slice(0, 3).map((c, idx) => ({
+        rank: idx + 1,
+        carrier: c.carrier,
+        matchScore: parseFloat((c.matchScore / 100).toFixed(2)),
+        appetiteStatus: c.appetiteStatus,
+        overview: `${c.knownFor || 'Insurance carrier'}`,
+        stateAnalysis: {
+          eligible: true,
+          details: c.statesOperatingIn || 'Available in requested state'
+        },
+        coverageAnalysis: {
+          acceptable: true,
+          details: 'Coverage within carrier appetite'
+        },
+        underwritingNotes: c.rationale?.slice(0, 2).join('; ') || 'Standard underwriting applies',
+        strengths: c.rationale?.slice(0, 2) || ['Direct market access'],
+        considerations: c.type?.toLowerCase().includes('wholesaler') ? ['Wholesaler fees apply'] : ['Standard requirements'],
+        recommendation: `${c.type?.toLowerCase().includes('direct') ? 'Direct market' : 'Wholesale'} option for this placement.`
+      }))
+    };
+  }
+
+  console.log(`Validated recommendations: ${top3.length} valid (limited to 3)`);
+
+  return {
+    ...analysisData,
+    escalate: false,
+    totalCandidates: rankedCandidates.length,
+    recommendations: top3
+  };
+}
+
 // Initialize the agent (load data)
-export async function initializeAgent(): Promise<void> {
-  await loadInsuranceData();
-  const stats = getDataStats();
-  console.log('Agent initialized:', stats);
+export async function initializeAgent(): Promise<{
+  ready: boolean;
+  stats?: { totalCarriers: number; totalAppetiteRecords: number; totalCoverageTypes: number } | null;
+}> {
+  try {
+    await loadInsuranceData();
+    const stats = getDataStats();
+    console.log('Agent initialized:', stats);
+    return {
+      ready: true,
+      stats: {
+        totalCarriers: stats.totalCarriers,
+        totalAppetiteRecords: stats.totalRecords,
+        totalCoverageTypes: stats.totalLobs
+      }
+    };
+  } catch (error) {
+    console.error('Agent initialization error:', error);
+    return { ready: false };
+  }
 }
 
 export { getDataStats };

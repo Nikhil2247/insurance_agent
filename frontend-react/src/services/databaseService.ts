@@ -6,7 +6,8 @@ import {
   query,
   where,
   Timestamp,
-  deleteDoc
+  deleteDoc,
+  writeBatch
 } from 'firebase/firestore';
 import { db } from '@/config/firebase';
 import Papa from 'papaparse';
@@ -249,27 +250,41 @@ export async function seedDatabaseFromCSV(csvUrl: string = '/data/carrier_appeti
   }
   console.log(`Seeded ${coverageCount} coverage types`);
 
-  // Seed appetites one by one to avoid batch permission issues
-  console.log(`Seeding ${appetites.length} appetite records...`);
+  // Seed appetites using Firebase batch writes (up to 500 per batch)
+  console.log(`Seeding ${appetites.length} appetite records using batch writes...`);
   let seededCount = 0;
-  for (const appetite of appetites) {
-    try {
-      const docId = `${appetite.carrierId}_${appetite.coverageType.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  let errorCount = 0;
+  const BATCH_SIZE = 450;  // Firebase limit is 500, use 450 to be safe
+
+  // Process in batches of 450
+  for (let i = 0; i < appetites.length; i += BATCH_SIZE) {
+    const batchItems = appetites.slice(i, i + BATCH_SIZE);
+    const batch = writeBatch(db);
+
+    // Add all items to the batch - use column name in ID to avoid overwrites
+    batchItems.forEach((appetite) => {
+      const columnId = appetite.coverageColumnName?.toLowerCase().replace(/[^a-z0-9]/g, '_') || '';
+      const docId = `${appetite.carrierId}_${columnId}_${appetite.coverageType.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
       const docRef = doc(db, COLLECTIONS.CARRIER_APPETITES, docId);
-      await setDoc(docRef, {
+      batch.set(docRef, {
         ...appetite,
         createdAt: Timestamp.fromDate(appetite.createdAt),
         updatedAt: Timestamp.fromDate(appetite.updatedAt),
       });
-      seededCount++;
-      if (seededCount % 50 === 0) {
-        console.log(`Seeded ${seededCount}/${appetites.length} appetite records...`);
-      }
+    });
+
+    // Commit the batch
+    try {
+      await batch.commit();
+      seededCount += batchItems.length;
+      console.log(`Batch committed: ${seededCount}/${appetites.length} records`);
     } catch (error) {
-      console.error(`Error seeding appetite for ${appetite.carrierName}:`, error);
+      errorCount += batchItems.length;
+      console.error(`Batch error at ${i}:`, error);
     }
   }
-  console.log(`Seeded ${seededCount} appetite records`);
+
+  console.log(`Seeding complete: ${seededCount} records saved, ${errorCount} errors`);
 
   // Update metadata
   try {

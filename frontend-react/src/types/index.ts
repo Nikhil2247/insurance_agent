@@ -76,4 +76,6 @@ export interface DataStats {
   records: number
   rules: number
   loadedFromDB?: boolean
+  dataSource?: 'firebase' | 'none'
 }
+
