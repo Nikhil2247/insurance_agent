@@ -17,12 +17,8 @@ import {
   deleteChat,
   generateTitle
 } from '@/services/chatService';
-import { initializeAgent } from '@/services/aiAgent';
 import { runInsuranceAgent, InsuranceAgentResult, initializeLangGraphAgent } from '@/services/langgraph';
 import { generateId } from '@/lib/utils';
-
-// Toggle between LangGraph and legacy AI agent
-const USE_LANGGRAPH = true;
 
 interface ChatItem {
   id: string;
@@ -73,62 +69,6 @@ function langGraphToAnalysisData(result: InsuranceAgentResult): { summary: strin
   return { summary, analysisData };
 }
 
-// Parse JSON from response text (legacy - for non-LangGraph responses)
-function parseAnalysisData(responseText: string): { summary: string; analysisData: AnalysisData | null } {
-  try {
-    // Find JSON object in the response (with or without code block markers)
-    const jsonStartIdx = responseText.indexOf('{"request"');
-    const altJsonStartIdx = responseText.indexOf('{\n  "request"');
-    const actualStart = jsonStartIdx !== -1 ? jsonStartIdx : altJsonStartIdx;
-
-    if (actualStart !== -1) {
-      // Find matching closing brace
-      let braceCount = 0;
-      let endIdx = -1;
-      for (let i = actualStart; i < responseText.length; i++) {
-        if (responseText[i] === '{') braceCount++;
-        if (responseText[i] === '}') braceCount--;
-        if (braceCount === 0) {
-          endIdx = i;
-          break;
-        }
-      }
-
-      if (endIdx !== -1) {
-        const jsonStr = responseText.substring(actualStart, endIdx + 1);
-        const analysisData = JSON.parse(jsonStr) as AnalysisData;
-
-        if (analysisData && analysisData.recommendations) {
-          // Extract summary (text before JSON, excluding code block markers)
-          let summary = responseText.substring(0, actualStart).trim();
-          summary = summary.replace(/```json\s*$/i, '').replace(/```\s*$/i, '').trim();
-
-          // If summary is empty, create a default one
-          if (!summary) {
-            const state = analysisData.request?.state || '';
-            const lob = analysisData.request?.lob || '';
-            summary = `Found ${analysisData.recommendations.length} carrier options for ${lob} in ${state}.`;
-          }
-
-          console.log('Parsed', analysisData.recommendations.length, 'recommendations');
-          return { summary, analysisData };
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Failed to parse analysis data:', e);
-  }
-
-  // If no JSON found, clean any partial JSON from response
-  let cleanedResponse = responseText;
-  const partialJsonIdx = cleanedResponse.indexOf('{"request"');
-  if (partialJsonIdx !== -1) {
-    cleanedResponse = cleanedResponse.substring(0, partialJsonIdx).trim();
-  }
-
-  return { summary: cleanedResponse || responseText, analysisData: null };
-}
-
 export function ChatInterface() {
   const { user, logout } = useAuth();
   const [chats, setChats] = useState<ChatItem[]>([]);
@@ -159,38 +99,21 @@ export function ChatInterface() {
 
   const initAgent = async () => {
     try {
-      if (USE_LANGGRAPH) {
-        // Use LangGraph agent with indexed data
-        const result = await initializeLangGraphAgent();
-        if (result.stats) {
-          setStats({
-            carriers: result.stats.totalCarriers,
-            lobs: result.stats.totalLobs,
-            records: result.stats.totalCarriers, // Use carriers as proxy for records
-            rules: result.stats.totalRules,
-            loadedFromDB: result.stats.dataSource === 'firebase',
-            dataSource: result.stats.dataSource,
-          });
-        } else {
-          setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false, dataSource: 'none' });
-        }
-        setAgentReady(result.ready);
+      // Use LangGraph agent with indexed data
+      const result = await initializeLangGraphAgent();
+      if (result.stats) {
+        setStats({
+          carriers: result.stats.totalCarriers,
+          lobs: result.stats.totalLobs,
+          records: result.stats.totalCarriers,
+          rules: result.stats.totalRules,
+          loadedFromDB: result.stats.dataSource === 'firebase',
+          dataSource: result.stats.dataSource,
+        });
       } else {
-        // Legacy AI agent
-        const result = await initializeAgent();
-        if (result.stats) {
-          setStats({
-            carriers: result.stats.totalCarriers,
-            lobs: result.stats.totalCoverageTypes,
-            records: result.stats.totalAppetiteRecords,
-            rules: 0,
-            loadedFromDB: true
-          });
-        } else {
-          setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false });
-        }
-        setAgentReady(result.ready);
+        setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false, dataSource: 'none' });
       }
+      setAgentReady(result.ready);
     } catch (error) {
       console.error('Failed to initialize agent:', error);
       setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false });
@@ -339,51 +262,28 @@ export function ChatInterface() {
     setIsLoading(true);
 
     try {
-      let summary: string;
-      let analysisData: AnalysisData | null = null;
+      // Run LangGraph agent
+      console.log('[ChatInterface] Running LangGraph agent for:', content);
+      const result = await runInsuranceAgent(content);
 
-      if (USE_LANGGRAPH) {
-        // === LangGraph Multi-Tool Agent ===
-        console.log('=== ChatInterface: Using LangGraph Agent ===');
-        console.log('User content:', content);
+      console.log('[ChatInterface] Result:', {
+        totalEligible: result.totalEligibleCarriers,
+        recommendations: result.recommendations.length,
+        escalate: result.escalate,
+      });
 
-        const result = await runInsuranceAgent(content);
+      const parsed = langGraphToAnalysisData(result);
+      let summary = parsed.summary;
+      const analysisData = parsed.analysisData;
 
-        console.log('=== ChatInterface: LangGraph Result ===');
-        console.log('Total eligible:', result.totalEligibleCarriers);
-        console.log('Recommendations:', result.recommendations.length);
-        console.log('Escalate:', result.escalate);
-
-        const parsed = langGraphToAnalysisData(result);
-        summary = parsed.summary;
-        analysisData = parsed.analysisData;
-
-        // Add warnings and market insights only for search queries (not follow-ups)
-        if (result.queryIntent !== 'followup') {
-          // Add warnings to summary if any
-          if (result.warnings.length > 0 && !result.escalate) {
-            summary += `\n\n> ⚠️ ${result.warnings.join(' | ')}`;
-          }
-
-          // Add market insights
-          if (result.marketInsights && !result.escalate) {
-            summary += `\n\n**Market Insights:** ${result.marketInsights}`;
-          }
+      // Add warnings and market insights only for search queries (not follow-ups)
+      if (result.queryIntent !== 'followup') {
+        if (result.warnings.length > 0 && !result.escalate) {
+          summary += `\n\n> ${result.warnings.join(' | ')}`;
         }
-      } else {
-        // === Legacy AI Agent (LLM-based) ===
-        const history = messages.map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content
-        }));
-
-        console.log('=== ChatInterface: Using Legacy AI Agent ===');
-        const { chat: aiChat } = await import('@/services/aiAgent');
-        const result = await aiChat(content, history);
-
-        const parsed = parseAnalysisData(result.response);
-        summary = parsed.summary;
-        analysisData = parsed.analysisData;
+        if (result.marketInsights && !result.escalate) {
+          summary += `\n\n**Market Insights:** ${result.marketInsights}`;
+        }
       }
 
       const assistantMessage: Message = {

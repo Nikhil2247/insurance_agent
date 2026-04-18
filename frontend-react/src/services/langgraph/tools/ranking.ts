@@ -331,9 +331,32 @@ function isCarrierExcluded(carrierKey: string, lobKey: string, state: string): {
   return { excluded: false, reason: '' };
 }
 
+// Normalize carrier name for matching (handles variations)
+function normalizeCarrierForMatching(carrier: string): string[] {
+  const base = normalize(carrier);
+  const variants = [base];
+
+  // Remove common suffixes
+  const withoutSuffixes = base
+    .replace(/\s*(insurance|ins|company|corp|group|agency)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (withoutSuffixes && withoutSuffixes !== base) {
+    variants.push(withoutSuffixes);
+  }
+
+  // Get first word (often the main name)
+  const firstWord = base.split(' ')[0];
+  if (firstWord && firstWord.length > 3 && !variants.includes(firstWord)) {
+    variants.push(firstWord);
+  }
+
+  return variants;
+}
+
 // Get LOB-specific ranking for carrier
 function getLobRanking(carrierKey: string, lobKey: string, state: string): number {
-  const carrierLower = normalize(carrierKey);
+  const carrierVariants = normalizeCarrierForMatching(carrierKey);
   const lobLower = normalize(lobKey);
   const stateUpper = state.toUpperCase();
 
@@ -342,14 +365,17 @@ function getLobRanking(carrierKey: string, lobKey: string, state: string): numbe
   if (stateRankings) {
     const lobRankings = stateRankings[lobLower];
     if (lobRankings) {
-      // Check exact match
-      if (lobRankings[carrierLower] !== undefined) {
-        return lobRankings[carrierLower];
-      }
-      // Check partial match
-      for (const [rankedCarrier, score] of Object.entries(lobRankings)) {
-        if (carrierLower.includes(rankedCarrier) || rankedCarrier.includes(carrierLower)) {
-          return score;
+      // Check all carrier variants
+      for (const variant of carrierVariants) {
+        // Exact match
+        if (lobRankings[variant] !== undefined) {
+          return lobRankings[variant];
+        }
+        // Partial match
+        for (const [rankedCarrier, score] of Object.entries(lobRankings)) {
+          if (variant.includes(rankedCarrier) || rankedCarrier.includes(variant)) {
+            return score;
+          }
         }
       }
     }
@@ -358,12 +384,14 @@ function getLobRanking(carrierKey: string, lobKey: string, state: string): numbe
   // Fall back to default LOB rankings
   const defaultRankings = DEFAULT_LOB_RANKINGS[lobLower];
   if (defaultRankings) {
-    if (defaultRankings[carrierLower] !== undefined) {
-      return defaultRankings[carrierLower];
-    }
-    for (const [rankedCarrier, score] of Object.entries(defaultRankings)) {
-      if (carrierLower.includes(rankedCarrier) || rankedCarrier.includes(carrierLower)) {
-        return score;
+    for (const variant of carrierVariants) {
+      if (defaultRankings[variant] !== undefined) {
+        return defaultRankings[variant];
+      }
+      for (const [rankedCarrier, score] of Object.entries(defaultRankings)) {
+        if (variant.includes(rankedCarrier) || rankedCarrier.includes(variant)) {
+          return score;
+        }
       }
     }
   }

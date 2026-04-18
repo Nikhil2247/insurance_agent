@@ -3,6 +3,11 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { ChatInterface } from '@/components/chat/ChatInterface'
 import { AuthPage } from '@/pages/AuthPage'
 import { DatabaseAdmin } from '@/components/admin/DatabaseAdmin'
+import { preloadCarrierData } from '@/services/langgraph/data/firebaseDataService'
+
+// Preload carrier data on app start (runs once, uses localStorage cache)
+// This ensures data is ready before first user query - 0 Firestore reads if cached
+preloadCarrierData();
 
 function AppContent() {
   const { user, loading } = useAuth()

@@ -83,60 +83,78 @@ const indexedData: IndexedData = {
 };
 
 // LOB category mappings for query normalization
-// Keys should match Firebase coverageType/coverageColumnName values (lowercase)
+// Keys should match the lob_key values in aiReadyLongform collection (lowercase)
 // Aliases are what users might type in queries
 const LOB_ALIASES: Record<string, string[]> = {
-  // Personal Property - multiple key formats to match Firebase variations
-  'home': ['home', 'ho3', 'homeowners', 'homeowner', 'house', 'owner-occupied'],
+  // ===== HOME/PROPERTY =====
+  // Primary key that matches seeded data
+  'homeowners': [
+    'homeowners', 'homeowner', 'home', 'house', 'owner-occupied', 'home insurance',
+    'home policy', 'ho3', 'residential', 'dwelling'
+  ],
   'ho3': ['ho3', 'homeowners', 'home'],
-  'homeowners': ['homeowners', 'homeowner', 'home insurance', 'owner-occupied', 'home policy'],
-  'condo': ['condo', 'condominium', 'ho6', 'ho-6'],
-  'renters': ['renters', 'renter', 'ho4', 'ho-4', 'tenant'],
-  'renters ho4': ['renters', 'renter', 'ho4', 'tenant'],
-  // Landlord/DP3 - important alias: "dwelling fire" maps here
-  'landlord': ['landlord', 'dp3', 'dp-3', 'rental property', 'investment property', 'dwelling fire', 'tenant-occupied', 'tenant occupied'],
-  'landlord/dp3': ['landlord', 'dp3', 'dwelling fire', 'tenant-occupied'],
+  'condo': ['condo', 'condominium', 'ho6', 'ho-6', 'condo insurance'],
+  'renters': ['renters', 'renter', 'ho4', 'ho-4', 'tenant insurance', 'apartment'],
+  // Landlord/DP3 - multiple entry points all map to 'landlord'
+  'landlord': [
+    'landlord', 'dp3', 'dp-3', 'rental property', 'investment property',
+    'tenant-occupied', 'tenant occupied', 'rental home', 'rental insurance',
+    'investor', 'non-owner occupied'
+  ],
   'dwelling fire': ['dwelling fire', 'landlord', 'dp3', 'tenant-occupied'],
-  'manufactured homes': ['manufactured', 'mobile home', 'modular', 'manufactured home'],
-  'manufactured home': ['manufactured', 'mobile home', 'modular'],
+  // Manufactured homes
+  'manufactured homes': [
+    'manufactured', 'mobile home', 'modular', 'manufactured home',
+    'mobile', 'trailer home', 'prefab'
+  ],
 
-  // Auto - multiple formats
-  'auto': ['auto', 'car', 'vehicle', 'personal auto', 'auto insurance', 'car insurance'],
-  'personal auto': ['personal auto', 'auto insurance', 'car insurance', 'personalauto'],
-  'personalauto': ['personal auto', 'personalauto', 'auto'],
-  'motorcycle': ['motorcycle', 'motorbike'],
-  'collector cars': ['collector', 'classic car', 'antique car', 'collector car'],
-  'classic car': ['classic car', 'collector car', 'antique car'],
+  // ===== AUTO =====
+  'auto': [
+    'auto', 'car', 'vehicle', 'personal auto', 'auto insurance',
+    'car insurance', 'automobile', 'ppa'
+  ],
+  'motorcycle': ['motorcycle', 'motorbike', 'bike'],
+  'collector cars': ['collector', 'classic car', 'antique car', 'collector car', 'vintage'],
 
-  // Commercial Lines - multiple formats to match Firebase naming
-  'bop': ['bop', 'business owners policy', 'business owners', 'packaged', 'businessowners'],
-  'business owners policy': ['business owners policy', 'bop', 'business owners', 'packaged polices'],
-  'businessowners': ['bop', 'business owners', 'businessowners'],
-  'packaged': ['packaged', 'bop', 'packaged polices'],
-  'general liability': ['general liability', 'gl', 'liability insurance', 'liability', 'generalliability'],
-  'generalliability': ['general liability', 'gl', 'generalliability'],
-  'commercial auto': ['commercial auto', 'business auto', 'fleet', 'commercialauto', 'comm auto'],
-  'commercialauto': ['commercial auto', 'commercialauto', 'business auto'],
-  // Workers Comp - many variations
-  'workers comp': ['workers comp', 'workers compensation', 'work comp', 'wc', 'workerscomp', 'workcomp', 'worker comp'],
-  'workers compensation': ['workers compensation', 'workers comp', 'work comp', 'workerscompensation'],
-  'workerscomp': ['workers comp', 'workerscomp', 'workers compensation'],
-  'workerscompensation': ['workers compensation', 'workerscompensation', 'workers comp'],
-  'workcomp': ['workers comp', 'workcomp', 'work comp'],
-  // Commercial Property - many variations
-  'commercial property': ['commercial property', 'business property', 'commercialproperty', 'comm property'],
-  'commercialproperty': ['commercial property', 'commercialproperty', 'business property'],
-  'business property': ['business property', 'commercial property'],
+  // ===== COMMERCIAL LINES =====
+  'bop': [
+    'bop', 'business owners policy', 'business owners', 'packaged',
+    'businessowners', 'small business', 'business insurance', 'commercial package'
+  ],
+  'general liability': [
+    'general liability', 'gl', 'liability insurance', 'liability',
+    'generalliability', 'commercial liability', 'cgl'
+  ],
+  'commercial auto': [
+    'commercial auto', 'business auto', 'fleet', 'commercialauto',
+    'comm auto', 'company vehicles', 'business vehicles', 'commercial vehicle'
+  ],
+  'workers compensation': [
+    'workers comp', 'workers compensation', 'work comp', 'wc',
+    'workerscomp', 'workcomp', 'worker comp', 'work injury', 'employee injury'
+  ],
+  'commercial property': [
+    'commercial property', 'business property', 'commercialproperty',
+    'comm property', 'business building', 'commercial building'
+  ],
 
-  // Specialty
-  'umbrella': ['umbrella', 'excess liability', 'personal umbrella'],
-  'flood': ['flood', 'flood insurance'],
-  'earthquake': ['earthquake', 'quake'],
-  'boat': ['boat', 'watercraft'],
-  'yachts': ['yacht', 'yachts'],
-  'jewelry floater': ['jewelry', 'personal article', 'valuables', 'jewelry floater'],
-  'personal article floater': ['personal article', 'jewelry', 'valuables', 'floater'],
-  'high net worth client': ['high net worth', 'hnw', 'affluent'],
+  // ===== SPECIALTY/LIABILITY =====
+  'umbrella': ['umbrella', 'excess liability', 'personal umbrella', 'pup'],
+  'flood': ['flood', 'flood insurance', 'flood policy'],
+  'earthquake': ['earthquake', 'quake', 'seismic'],
+  'boat': ['boat', 'watercraft', 'marine', 'vessel'],
+  'yachts': ['yacht', 'yachts', 'large boat'],
+  'rv': ['rv', 'recreational vehicle', 'motorhome', 'camper'],
+  'atv': ['atv', 'utv', 'atv/utv', 'golf cart', 'golf carts', 'off-road'],
+  'snowmobile': ['snowmobile', 'snow machine'],
+  'jewelry floater': [
+    'jewelry', 'personal article', 'valuables', 'jewelry floater',
+    'fine jewelry', 'floater', 'scheduled items'
+  ],
+  'high net worth': ['high net worth', 'hnw', 'affluent', 'luxury home'],
+  'short term rental': ['airbnb', 'vrbo', 'short term rental', 'vacation rental'],
+  'pet': ['pet', 'pet insurance'],
+  'travel': ['travel', 'travel insurance'],
 };
 
 // Parse states from state string
@@ -144,7 +162,12 @@ function parseStatesFromString(stateStr: string): string[] {
   if (!stateStr) return [];
   const upper = stateStr.toUpperCase();
 
-  if (upper.includes('ALL STATES') || upper.includes('ALL 50')) {
+  // Recognize various "all states" patterns including CBIG-specific ones
+  if (upper.includes('ALL STATES') ||
+      upper.includes('ALL 50') ||
+      upper.includes('CBIG') ||
+      upper.includes('CBI ') ||
+      upper.includes('ANY STATE')) {
     return ['ALL'];
   }
 
@@ -369,10 +392,12 @@ export function getCarriersForStateAndLob(
   const stateUpper = state.toUpperCase();
   const lobKeys = normalizeLobQuery(lobQuery);
 
+  console.log(`[CarrierDataIndex] Query: state=${state}, lob=${lobQuery}, matched keys: [${lobKeys.join(', ')}]`);
+
   // Get carriers operating in this state
   const carriersInState = indexedData.byState.get(stateUpper) || new Set();
   const carriersInAll = indexedData.byState.get('ALL') || new Set();
-  const eligibleCarriers = new Set([...carriersInState, ...carriersInAll]);
+  const eligibleCarriersByState = new Set([...carriersInState, ...carriersInAll]);
 
   // Get carriers with appetite for the LOB(s)
   const results: CarrierAppetiteRecord[] = [];
@@ -380,20 +405,61 @@ export function getCarriersForStateAndLob(
 
   for (const lobKey of lobKeys) {
     const lobCarriers = indexedData.byLob.get(lobKey) || [];
+    console.log(`[CarrierDataIndex] LOB key "${lobKey}" has ${lobCarriers.length} carriers`);
 
     for (const record of lobCarriers) {
-      // Only include if carrier operates in the state
-      if (!state || eligibleCarriers.has(record.carrier_key) || eligibleCarriers.size === 0) {
-        // Deduplicate by carrier
-        if (!seen.has(record.carrier_key)) {
-          seen.add(record.carrier_key);
-          results.push(record);
+      // Skip if already seen
+      if (seen.has(record.carrier_key)) continue;
+
+      // Check state eligibility
+      let stateEligible = false;
+
+      // If no state specified, include all carriers
+      if (!state) {
+        stateEligible = true;
+      }
+      // If carrier is in our state index (either specific state or ALL)
+      else if (eligibleCarriersByState.has(record.carrier_key)) {
+        stateEligible = true;
+      }
+      // If state index is empty (data issue), include all and filter later
+      else if (eligibleCarriersByState.size === 0) {
+        stateEligible = true;
+      }
+      // Check the state_raw field directly (for carriers not in index)
+      else if (record.state_raw) {
+        const stateRawUpper = record.state_raw.toUpperCase();
+        if (stateRawUpper.includes('ALL STATES') ||
+            stateRawUpper.includes('ALL 50') ||
+            stateRawUpper.includes('CBIG') ||
+            stateRawUpper.includes('CBI ') ||
+            stateRawUpper.includes('ANY STATE') ||
+            stateRawUpper.includes(stateUpper)) {
+          stateEligible = true;
         }
+      }
+      // If state_raw is empty, assume all states (conservative)
+      else if (!record.state_raw || record.state_raw.trim() === '') {
+        stateEligible = true;
+      }
+
+      if (stateEligible) {
+        seen.add(record.carrier_key);
+        results.push(record);
       }
     }
   }
 
-  console.log(`[CarrierDataIndex] Query: state=${state}, lob=${lobQuery} -> ${results.length} carriers`);
+  // Log top results for debugging
+  if (results.length > 0) {
+    console.log(`[CarrierDataIndex] Found ${results.length} carriers. Top 5:`,
+      results.slice(0, 5).map(r => `${r.carrier_raw} (${r.carrier_key})`).join(', ')
+    );
+  } else {
+    console.warn(`[CarrierDataIndex] No carriers found for state=${state}, lob=${lobQuery}`);
+    console.warn(`[CarrierDataIndex] Available LOBs:`, Array.from(indexedData.allLobs).slice(0, 20).join(', '));
+  }
+
   return results;
 }
 

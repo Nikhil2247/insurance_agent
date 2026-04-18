@@ -261,32 +261,46 @@ export async function aiParseQuery(userQuery: string): Promise<ParsedQuery> {
     return fallbackParseQuery(userQuery);
   }
 
-  const prompt = `You are an insurance query parser. Extract structured data from this query.
+  const prompt = `You are an insurance query parser for Chambers Bay Insurance Group. Extract structured data from insurance placement queries.
 
 USER QUERY: "${userQuery}"
 
-Extract and return a JSON object with these fields:
+TASK: Extract the following information and return as valid JSON:
+
 {
-  "state": "2-letter state code (e.g., TX, CA) or empty string if not mentioned",
-  "lob": "Primary line of business (use standard names like: Homeowners, Auto, Landlord/DP3, Condo, Renters, Commercial Auto, Workers Compensation, BOP, General Liability, Umbrella, Flood, Boat, Motorcycle, etc.)",
-  "lobVariants": ["array of alternative LOB names to search, e.g., for 'rental property' include 'Landlord', 'DP3', 'Dwelling Fire'"],
-  "coverage": number (coverage amount in dollars, 0 if not specified),
-  "intent": "search" (new search) or "followup" (asking about specific carrier) or "general" (general question),
-  "riskFactors": ["array of risk factors mentioned, e.g., 'investment property', 'high-value', 'coastal', 'new construction'"],
-  "selectedCarrier": "carrier name if this is a followup query, otherwise null",
-  "confidence": 0.0 to 1.0 (how confident you are in the extraction)
+  "state": "<2-letter US state code or empty string>",
+  "lob": "<Primary line of business - use EXACT names from list below>",
+  "lobVariants": ["<alternative LOB search terms>"],
+  "coverage": <coverage amount as number, 0 if not specified>,
+  "intent": "<search|followup|general>",
+  "riskFactors": ["<identified risk factors>"],
+  "selectedCarrier": "<carrier name if followup, otherwise null>",
+  "confidence": <0.0 to 1.0>
 }
 
-IMPORTANT LOB MAPPINGS:
-- "rental property", "investment property", "tenant-occupied" → Landlord/DP3
-- "dwelling fire" → Landlord/DP3
-- "home", "house", "owner-occupied" → Homeowners
-- "car", "vehicle" → Auto
-- "business insurance", "small business" → BOP
-- "work injury", "employee injury" → Workers Compensation
-- "company vehicles", "fleet" → Commercial Auto
+STANDARD LOB NAMES (use these exact values):
+- Home/Property: "Homeowners", "Condo", "Renters", "Landlord", "Manufactured Home", "Dwelling Fire"
+- Auto: "Auto", "Motorcycle", "Collector Cars", "Commercial Auto"
+- Liability: "Umbrella", "General Liability"
+- Specialty: "Flood", "Earthquake", "Boat", "Yachts", "RV", "Jewelry Floater"
+- Commercial: "BOP", "Workers Compensation", "Commercial Property"
 
-Return ONLY the JSON object, no explanation.`;
+LOB INFERENCE RULES:
+- "rental property", "investment property", "tenant-occupied", "dp3" → "Landlord"
+- "home", "house", "owner-occupied", "ho3" → "Homeowners"
+- "car", "vehicle", "auto insurance" → "Auto"
+- "business owners", "small business", "packaged" → "BOP"
+- "work injury", "employee injury", "work comp" → "Workers Compensation"
+- "company vehicles", "fleet", "business auto" → "Commercial Auto"
+- "mobile home", "modular home" → "Manufactured Home"
+- "personal umbrella", "excess liability" → "Umbrella"
+
+INTENT DETECTION:
+- "search": New carrier search request (default)
+- "followup": Asking about specific carrier, "proceed with", "select", "tell me about"
+- "general": General questions, not a placement request
+
+RESPONSE FORMAT: Return ONLY valid JSON, no markdown, no explanation.`;
 
   try {
     const response = await callLLM(prompt, 500);
@@ -553,47 +567,53 @@ ${rec.rank}. ${rec.carrier}
    - Current Strengths: ${rec.strengths.join(', ')}`;
   }).join('\n');
 
-  const prompt = `You are an expert insurance placement advisor. Enhance these carrier recommendations with better insights.
+  const prompt = `You are an expert insurance placement advisor for Chambers Bay Insurance Group. Enhance carrier recommendations with professional insights.
 
-SEARCH CRITERIA:
+PLACEMENT REQUEST:
 - State: ${context.state || 'Not specified'}
 - Line of Business: ${context.lob}
-- Coverage Amount: ${context.coverage ? `$${context.coverage.toLocaleString()}` : 'Not specified'}
+- Coverage: ${context.coverage ? `$${context.coverage.toLocaleString()}` : 'Not specified'}
 - Risk Factors: ${context.riskFactors.length > 0 ? context.riskFactors.join(', ') : 'Standard risk'}
 
-ALREADY RANKED CARRIERS (DO NOT CHANGE RANKING):
+RANKED CARRIERS (MAINTAIN THIS EXACT ORDER):
 ${carrierDataStr}
 
-IMPORTANT: Keep the EXACT SAME carriers in the EXACT SAME order. Only enhance the descriptions.
+TASK: Enhance the descriptions for these carriers. DO NOT change the ranking order or carrier names.
 
-Return a JSON object:
+OUTPUT FORMAT (strict JSON):
 {
   "recommendations": [
     {
       "rank": 1,
-      "carrier": "Exact carrier name from input",
-      "matchScore": same score as input,
-      "appetiteStatus": same as input,
-      "overview": "Enhanced 1-2 sentence overview explaining why this carrier is ideal for this specific search",
+      "carrier": "<EXACT carrier name from input>",
+      "matchScore": <EXACT score from input>,
+      "appetiteStatus": "<EXACT status from input>",
+      "overview": "<1-2 sentences: Why this carrier fits this specific placement>",
       "stateAnalysis": {
         "eligible": true,
-        "details": "Specific details about state coverage"
+        "details": "<State coverage specifics>"
       },
       "coverageAnalysis": {
         "acceptable": true,
-        "details": "Coverage assessment"
+        "details": "<Coverage fit assessment>"
       },
-      "underwritingNotes": "Key underwriting considerations",
-      "strengths": ["strength1", "strength2"],
-      "considerations": ["consideration1"],
-      "recommendation": "Actionable recommendation"
+      "underwritingNotes": "<Key UW considerations>",
+      "strengths": ["<strength 1>", "<strength 2>"],
+      "considerations": ["<consideration 1>"],
+      "recommendation": "<Actionable next step>"
     }
   ],
-  "marketInsights": "2-3 sentence market assessment for this LOB in this state",
+  "marketInsights": "<2-3 sentences: ${context.state} ${context.lob} market conditions, competition level, notable factors>",
   "warnings": []
 }
 
-Return ONLY valid JSON.`;
+ENHANCEMENT GUIDELINES:
+- Overview: Be specific about why this carrier excels for this exact placement
+- Strengths: Focus on carrier advantages for this LOB/state combination
+- Considerations: Note any conditions, requirements, or wholesaler fees
+- Market Insights: Professional assessment of market competitiveness
+
+Return ONLY valid JSON, no markdown code blocks.`;
 
   try {
     const response = await callLLM(prompt, 2000);

@@ -3,15 +3,16 @@
  *
  * Optimization strategies:
  * 1. Use limit(1) for connection checks instead of fetching all docs
- * 2. Aggressive in-memory caching with TTL
- * 3. Targeted queries by LOB - only fetch what's needed
- * 4. Cache results to prevent redundant reads
+ * 2. Aggressive in-memory + localStorage caching with TTL
+ * 3. Single collection fetch (aiReadyLongform only, fallback to carrierAppetites)
+ * 4. Singleton fetch pattern - prevents duplicate parallel fetches
+ * 5. Cache persists across page reloads via localStorage
+ * 6. 2-hour cache TTL to minimize reads
  *
- * Collections:
- * - carriers: id, name, knownFor, statesOperatingIn, type
- * - carrierAppetites: carrierId, carrierName, carrierType, coverageColumnName,
- *                     coverageType, hasAppetite, knownFor, statesOperatingIn, appetiteDetails
- * - coverageTypes: category, columnName, name
+ * FIRESTORE READS PER SESSION:
+ * - First load: 1 query (all records from aiReadyLongform)
+ * - Subsequent queries: 0 (all from cache)
+ * - After 2 hours: 1 query (refresh cache)
  */
 
 import {
@@ -27,25 +28,25 @@ import { db } from '@/config/firebase';
 // Collection Names
 // ============================================================================
 
-// Get collection names from environment or use defaults
-// The AI agent uses 'aiReadyLongform' collection (matches CBIG_AI_READY_LONGFORM.csv structure)
 const COLLECTIONS = {
   CARRIERS: 'carriers',
   COVERAGE_TYPES: 'coverageTypes',
   CARRIER_APPETITES: 'carrierAppetites',
-  // AI_READY is the main collection for the LangGraph agent
   AI_READY: import.meta.env.VITE_DB_COLLECTION_AI_READY || 'aiReadyLongform',
 };
 
 // ============================================================================
-// Cache Configuration
+// Cache Configuration - OPTIMIZED
 // ============================================================================
 
-const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes cache TTL
+// 2 hours cache TTL (reduced Firestore reads significantly)
+const CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+const LOCALSTORAGE_KEY = 'cbig_carrier_data_cache';
 
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
+  source?: string;
 }
 
 // In-memory cache for carrier appetites by LOB
@@ -57,6 +58,9 @@ let fullDataCache: CacheEntry<FirebaseCarrierAppetite[]> | null = null;
 // Connection status cache
 let connectionChecked = false;
 let isConnected = false;
+
+// Singleton fetch promise to prevent duplicate parallel fetches
+let fetchInProgress: Promise<AIReadyRecord[]> | null = null;
 
 // ============================================================================
 // Firebase Collection Types
@@ -143,6 +147,69 @@ function setCacheEntry<T>(cache: Map<string, CacheEntry<T>>, key: string, data: 
   cache.set(key, { data, timestamp: Date.now() });
 }
 
+// ============================================================================
+// LocalStorage Cache Functions (persist across page reloads)
+// ============================================================================
+
+interface LocalStorageCache {
+  records: AIReadyRecord[];
+  timestamp: number;
+  source: string;
+  version: string;
+}
+
+const CACHE_VERSION = '1.0';
+
+/**
+ * Save records to localStorage for persistence across page reloads
+ */
+function saveToLocalStorage(records: AIReadyRecord[], source: string): void {
+  try {
+    const cache: LocalStorageCache = {
+      records,
+      timestamp: Date.now(),
+      source,
+      version: CACHE_VERSION,
+    };
+    localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(cache));
+    console.log(`[FirebaseData] Saved ${records.length} records to localStorage`);
+  } catch (error) {
+    // localStorage might be full or disabled
+    console.warn('[FirebaseData] Could not save to localStorage:', error);
+  }
+}
+
+/**
+ * Load records from localStorage if cache is still valid
+ */
+function loadFromLocalStorage(): AIReadyRecord[] | null {
+  try {
+    const cached = localStorage.getItem(LOCALSTORAGE_KEY);
+    if (!cached) return null;
+
+    const cache: LocalStorageCache = JSON.parse(cached);
+
+    // Check version compatibility
+    if (cache.version !== CACHE_VERSION) {
+      console.log('[FirebaseData] Cache version mismatch, clearing');
+      localStorage.removeItem(LOCALSTORAGE_KEY);
+      return null;
+    }
+
+    // Check TTL
+    if (Date.now() - cache.timestamp > CACHE_TTL_MS) {
+      console.log('[FirebaseData] localStorage cache expired');
+      return null;
+    }
+
+    console.log(`[FirebaseData] Loaded ${cache.records.length} records from localStorage (source: ${cache.source})`);
+    return cache.records;
+  } catch (error) {
+    console.warn('[FirebaseData] Could not load from localStorage:', error);
+    return null;
+  }
+}
+
 /**
  * Clear all caches (useful for forcing refresh)
  */
@@ -150,7 +217,13 @@ export function clearFirebaseCache(): void {
   appetiteCache.clear();
   fullDataCache = null;
   connectionChecked = false;
-  console.log('[FirebaseData] Cache cleared');
+  fetchInProgress = null;
+  try {
+    localStorage.removeItem(LOCALSTORAGE_KEY);
+  } catch (e) {
+    // Ignore localStorage errors
+  }
+  console.log('[FirebaseData] All caches cleared (memory + localStorage)');
 }
 
 // ============================================================================
@@ -342,64 +415,84 @@ export async function fetchCarrierAppetitesFromFirebase(): Promise<FirebaseCarri
   }
 }
 
-// Cache for AI Ready records
+// Cache for AI Ready records (in-memory)
 let aiReadyCache: CacheEntry<AIReadyRecord[]> | null = null;
 
 /**
- * Fetch AI Ready records from Firebase
- * Checks BOTH collections and uses the one with more records
+ * Fetch AI Ready records - OPTIMIZED
+ *
+ * Strategy:
+ * 1. Check in-memory cache first (fastest)
+ * 2. Check localStorage cache (survives page reload)
+ * 3. If fetch in progress, wait for it (singleton pattern)
+ * 4. Fetch from aiReadyLongform ONLY (no parallel fetches)
+ * 5. Fallback to carrierAppetites only if primary is empty
+ *
+ * FIRESTORE READS: Maximum 1-2 per 2 hours
  */
 export async function fetchAIReadyRecords(): Promise<AIReadyRecord[]> {
-  // Check cache first
+  // 1. Check in-memory cache first (fastest)
   if (isCacheValid(aiReadyCache)) {
-    console.log(`[FirebaseData] AI Ready cache HIT (${aiReadyCache!.data.length} records)`);
+    console.log(`[FirebaseData] Memory cache HIT (${aiReadyCache!.data.length} records) - 0 Firestore reads`);
     return aiReadyCache!.data;
   }
 
-  try {
-    // Fetch from BOTH collections in parallel to compare
-    console.log(`[FirebaseData] Checking both collections for data...`);
-    const [aiReadyRecords, appetiteRecords] = await Promise.all([
-      tryFetchFromCollection(COLLECTIONS.AI_READY),
-      tryFetchFromCarrierAppetites(),
-    ]);
-
-    console.log(`[FirebaseData] ${COLLECTIONS.AI_READY}: ${aiReadyRecords.length} records`);
-    console.log(`[FirebaseData] ${COLLECTIONS.CARRIER_APPETITES}: ${appetiteRecords.length} records`);
-
-    // Use the collection with MORE records
-    let records: AIReadyRecord[];
-    let sourceCollection: string;
-
-    if (appetiteRecords.length > aiReadyRecords.length) {
-      records = appetiteRecords;
-      sourceCollection = COLLECTIONS.CARRIER_APPETITES;
-      console.log(`[FirebaseData] Using ${COLLECTIONS.CARRIER_APPETITES} (has more records)`);
-    } else if (aiReadyRecords.length > 0) {
-      records = aiReadyRecords;
-      sourceCollection = COLLECTIONS.AI_READY;
-      console.log(`[FirebaseData] Using ${COLLECTIONS.AI_READY}`);
-    } else {
-      records = [];
-      sourceCollection = 'none';
-      console.warn(`[FirebaseData] No records found in either collection!`);
-    }
-
-    // Cache the result
-    aiReadyCache = { data: records, timestamp: Date.now() };
-
-    // Log stats
-    const uniqueLobs = new Set(records.map(r => r.lob_key));
-    const uniqueCarriers = new Set(records.map(r => r.carrier_key));
-    console.log(`[FirebaseData] Loaded ${records.length} records from ${sourceCollection}`);
-    console.log(`[FirebaseData] Unique LOBs (${uniqueLobs.size}): ${Array.from(uniqueLobs).slice(0, 20).join(', ')}${uniqueLobs.size > 20 ? '...' : ''}`);
-    console.log(`[FirebaseData] Unique carriers: ${uniqueCarriers.size}`);
-
-    return records;
-  } catch (error) {
-    console.error(`[FirebaseData] Error fetching records:`, error);
-    throw error;
+  // 2. Check localStorage cache (survives page reload)
+  const localRecords = loadFromLocalStorage();
+  if (localRecords && localRecords.length > 0) {
+    // Populate in-memory cache from localStorage
+    aiReadyCache = { data: localRecords, timestamp: Date.now() };
+    console.log(`[FirebaseData] localStorage cache HIT - 0 Firestore reads`);
+    return localRecords;
   }
+
+  // 3. If fetch is already in progress, wait for it (singleton pattern)
+  if (fetchInProgress) {
+    console.log('[FirebaseData] Fetch already in progress, waiting...');
+    return fetchInProgress;
+  }
+
+  // 4. Start new fetch (will be shared by any concurrent callers)
+  fetchInProgress = (async () => {
+    try {
+      console.log(`[FirebaseData] Fetching from Firestore (1 query)...`);
+
+      // Try primary collection first (aiReadyLongform)
+      let records = await tryFetchFromCollection(COLLECTIONS.AI_READY);
+      let sourceCollection = COLLECTIONS.AI_READY;
+
+      // Only fallback to carrierAppetites if primary is empty
+      if (records.length === 0) {
+        console.log(`[FirebaseData] Primary collection empty, trying fallback...`);
+        records = await tryFetchFromCarrierAppetites();
+        sourceCollection = COLLECTIONS.CARRIER_APPETITES;
+      }
+
+      if (records.length === 0) {
+        console.warn(`[FirebaseData] No records found in any collection!`);
+        return [];
+      }
+
+      // Cache in memory
+      aiReadyCache = { data: records, timestamp: Date.now(), source: sourceCollection };
+
+      // Cache in localStorage for persistence
+      saveToLocalStorage(records, sourceCollection);
+
+      // Log stats
+      const uniqueLobs = new Set(records.map(r => r.lob_key));
+      const uniqueCarriers = new Set(records.map(r => r.carrier_key));
+      console.log(`[FirebaseData] Loaded ${records.length} records from ${sourceCollection}`);
+      console.log(`[FirebaseData] Unique LOBs: ${uniqueLobs.size}, Unique carriers: ${uniqueCarriers.size}`);
+
+      return records;
+    } finally {
+      // Clear the singleton promise
+      fetchInProgress = null;
+    }
+  })();
+
+  return fetchInProgress;
 }
 
 /**
@@ -629,10 +722,61 @@ export async function fetchAllNormalizedRecords(): Promise<NormalizedCarrierReco
 /**
  * Get cache statistics for debugging
  */
-export function getCacheStats(): { lobsCached: number; fullDataCached: boolean; connectionChecked: boolean } {
+export function getCacheStats(): {
+  lobsCached: number;
+  fullDataCached: boolean;
+  connectionChecked: boolean;
+  aiReadyCached: boolean;
+  localStorageCached: boolean;
+  cacheAge: number | null;
+} {
+  let localStorageCached = false;
+  try {
+    const cached = localStorage.getItem(LOCALSTORAGE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      localStorageCached = Date.now() - parsed.timestamp < CACHE_TTL_MS;
+    }
+  } catch (e) {
+    // Ignore
+  }
+
   return {
     lobsCached: appetiteCache.size,
     fullDataCached: isCacheValid(fullDataCache),
     connectionChecked,
+    aiReadyCached: isCacheValid(aiReadyCache),
+    localStorageCached,
+    cacheAge: aiReadyCache ? Math.round((Date.now() - aiReadyCache.timestamp) / 60000) : null,
   };
+}
+
+/**
+ * Preload data on app startup (call this early in app initialization)
+ * This ensures data is cached before first user query
+ */
+export async function preloadCarrierData(): Promise<void> {
+  console.log('[FirebaseData] Preloading carrier data...');
+  try {
+    await fetchAIReadyRecords();
+    console.log('[FirebaseData] Preload complete');
+  } catch (error) {
+    console.error('[FirebaseData] Preload failed:', error);
+  }
+}
+
+/**
+ * Get cache TTL info for display
+ */
+export function getCacheTTLInfo(): { ttlHours: number; expiresIn: number | null } {
+  const ttlHours = CACHE_TTL_MS / (60 * 60 * 1000);
+  let expiresIn: number | null = null;
+
+  if (aiReadyCache) {
+    const elapsed = Date.now() - aiReadyCache.timestamp;
+    const remaining = CACHE_TTL_MS - elapsed;
+    expiresIn = Math.max(0, Math.round(remaining / 60000)); // minutes
+  }
+
+  return { ttlHours, expiresIn };
 }
