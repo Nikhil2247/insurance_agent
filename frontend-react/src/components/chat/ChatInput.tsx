@@ -37,8 +37,11 @@ export function ChatInput({ onSend, isLoading, placeholder = "Ask about insuranc
   }
 
   return (
-    <div className="border-t border-gray-200 bg-white">
-      <div className="max-w-4xl mx-auto p-2 sm:p-4">
+    <div className="border-t border-gray-200 bg-white/95 backdrop-blur-sm">
+      <div
+        className="max-w-4xl mx-auto px-2 pt-2 sm:p-4"
+        style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 10px)' }}
+      >
         <div className={cn(
           'flex items-end gap-1 sm:gap-2 border border-gray-300 rounded-lg transition-all',
           'focus-within:border-gray-400 focus-within:shadow-sm'

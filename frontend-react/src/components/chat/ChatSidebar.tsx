@@ -64,8 +64,20 @@ export function ChatSidebar({
       )}>
         {/* Header */}
         <div className="p-3">
+          <div className="hidden md:flex items-center gap-2 px-2 py-2 mb-2 rounded-lg bg-gray-800/60 border border-gray-800">
+            <div className="w-8 h-8 rounded-md bg-gray-700 flex items-center justify-center shrink-0">
+              <MessageSquare className="w-4 h-4 text-white" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-white truncate">Insurance Placement AI</div>
+              <div className="text-[11px] text-gray-400 truncate">Chat Assistant</div>
+            </div>
+          </div>
           <div className="flex items-center justify-between mb-3 md:hidden">
-            <span className="text-white font-medium">Chats</span>
+            <div className="min-w-0">
+              <div className="text-white font-medium truncate">Insurance Placement AI</div>
+              <div className="text-[11px] text-gray-400 truncate">Chats</div>
+            </div>
             <button
               onClick={onClose}
               className="p-1.5 text-gray-400 hover:text-white transition-colors"

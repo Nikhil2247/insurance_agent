@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { Fragment, useState, useRef, useEffect } from 'react';
 import { Settings2, MessageSquare, LogOut, Menu, FileDown } from 'lucide-react';
 import { exportChatToPDF } from '@/services/pdfExport';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -6,7 +6,7 @@ import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { SuggestionCards } from './SuggestionCards';
 import { ChatSidebar } from './ChatSidebar';
-import { Message, DataStats, AnalysisData, DetailedRecommendation } from '@/types';
+import { Message, AnalysisData, DetailedRecommendation } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getUserChats,
@@ -25,6 +25,31 @@ interface ChatItem {
   title: string;
   lastMessage: string;
   updatedAt: string;
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function getTimelineLabel(date: Date): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  if (target.getTime() === today.getTime()) return 'Today';
+  if (target.getTime() === yesterday.getTime()) return 'Yesterday';
+
+  return date.toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 // Convert LangGraph result to AnalysisData format for UI compatibility
@@ -75,8 +100,6 @@ export function ChatInterface() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [stats, setStats] = useState<DataStats | null>(null);
-  const [agentReady, setAgentReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -106,25 +129,10 @@ export function ChatInterface() {
 
   const initAgent = async () => {
     try {
-      // Use LangGraph agent with indexed data
-      const result = await initializeLangGraphAgent();
-      if (result.stats) {
-        setStats({
-          carriers: result.stats.totalCarriers,
-          lobs: result.stats.totalLobs,
-          records: result.stats.totalCarriers,
-          rules: result.stats.totalRules,
-          loadedFromDB: result.stats.dataSource === 'firebase',
-          dataSource: result.stats.dataSource,
-        });
-      } else {
-        setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false, dataSource: 'none' });
-      }
-      setAgentReady(result.ready);
+      // Warm up LangGraph indexed data source.
+      await initializeLangGraphAgent();
     } catch (error) {
       console.error('Failed to initialize agent:', error);
-      setStats({ carriers: 0, lobs: 0, records: 0, rules: 0, loadedFromDB: false });
-      setAgentReady(true);
     }
   };
 
@@ -348,6 +356,7 @@ export function ChatInterface() {
   };
 
   const hasMessages = messages.length > 0;
+  const activeChatTitle = chats.find(c => c.id === activeChatId)?.title || 'New Chat';
 
   const handleExportPDF = async () => {
     if (messages.length === 0) return;
@@ -391,14 +400,7 @@ export function ChatInterface() {
                 <MessageSquare className="w-4 h-4 text-white" />
               </div>
               <div className="min-w-0">
-                <h1 className="font-medium text-gray-900 text-sm sm:text-base truncate">Insurance Placement AI</h1>
-                {stats && (
-                  <p className="text-xs text-gray-500 truncate">
-                    {stats.carriers} carriers · {stats.records.toLocaleString()} records
-                    {!agentReady && ' · Loading data...'}
-                    {agentReady && stats.dataSource === 'firebase' && ' · Firebase'}
-                  </p>
-                )}
+                <h1 className="font-medium text-gray-900 text-sm sm:text-base truncate">{activeChatTitle}</h1>
               </div>
             </div>
             <div className="flex items-center gap-1 sm:gap-2 shrink-0">
@@ -456,13 +458,31 @@ export function ChatInterface() {
           ) : (
             <ScrollArea className="h-full" ref={scrollRef}>
               <div className="pb-4">
-                {messages.map((message) => (
-                  <ChatMessage
-                    key={message.id}
-                    message={message}
-                    onSelectCarrier={handleSelectCarrier}
-                  />
-                ))}
+                {messages.map((message, idx) => {
+                  const prevMessage = idx > 0 ? messages[idx - 1] : null;
+                  const messageDate = new Date(message.timestamp);
+                  const showSeparator = !prevMessage || !isSameDay(new Date(prevMessage.timestamp), messageDate);
+
+                  return (
+                    <Fragment key={message.id}>
+                      {showSeparator && (
+                        <div className="max-w-4xl mx-auto px-3 sm:px-4 pt-4 sm:pt-5">
+                          <div className="flex items-center gap-3">
+                            <div className="h-px flex-1 bg-gray-200" />
+                            <span className="text-[11px] sm:text-xs text-gray-500 font-medium tracking-wide uppercase">
+                              {getTimelineLabel(messageDate)}
+                            </span>
+                            <div className="h-px flex-1 bg-gray-200" />
+                          </div>
+                        </div>
+                      )}
+                      <ChatMessage
+                        message={message}
+                        onSelectCarrier={handleSelectCarrier}
+                      />
+                    </Fragment>
+                  );
+                })}
               </div>
             </ScrollArea>
           )}

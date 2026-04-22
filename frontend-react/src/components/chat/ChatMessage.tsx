@@ -21,6 +21,39 @@ function TypingIndicator() {
   )
 }
 
+function RecommendationSkeletons() {
+  return (
+    <div className="mt-3 sm:mt-4">
+      <div className="text-xs sm:text-sm text-gray-500 mb-2 sm:mb-3">
+        Analyzing eligible carriers and building recommendations...
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 items-start gap-3 sm:gap-4">
+        {[1, 2, 3].map((item) => (
+          <div key={item} className="border border-gray-200 rounded-lg bg-white overflow-hidden animate-pulse">
+            <div className="p-3 sm:p-4 border-b border-gray-100 bg-gray-50">
+              <div className="flex items-center justify-between mb-3">
+                <div className="h-3 w-16 bg-gray-200 rounded" />
+                <div className="h-6 w-24 bg-gray-200 rounded" />
+              </div>
+              <div className="h-7 w-40 bg-gray-200 rounded mb-3" />
+              <div className="h-2 w-full bg-gray-200 rounded" />
+            </div>
+            <div className="p-3 sm:p-4 space-y-3">
+              <div className="h-4 w-full bg-gray-200 rounded" />
+              <div className="h-4 w-4/5 bg-gray-200 rounded" />
+              <div className="h-px bg-gray-100" />
+              <div className="h-4 w-1/2 bg-gray-200 rounded" />
+            </div>
+            <div className="p-3 sm:p-4 border-t border-gray-100 bg-gray-50">
+              <div className="h-10 w-full bg-gray-200 rounded-lg" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ExcludedCarriersList({ excluded }: { excluded?: Array<{ carrier: string; reason: string }> }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -51,11 +84,18 @@ function ExcludedCarriersList({ excluded }: { excluded?: Array<{ carrier: string
 
 export function ChatMessage({ message, onSelectCarrier }: ChatMessageProps) {
   const isUser = message.role === 'user'
+  const [selectedCarrier, setSelectedCarrier] = useState<string | null>(null)
 
   // Safely check for analysis data and recommendations
   const analysisData = message.analysisData
   const recommendations = analysisData?.recommendations
   const hasAnalysisData = Array.isArray(recommendations) && recommendations.length > 0
+
+  const handleSelectRecommendation = (rec: DetailedRecommendation) => {
+    if (selectedCarrier) return
+    setSelectedCarrier(rec.carrier)
+    onSelectCarrier?.(rec)
+  }
 
   return (
     <div className={cn(
@@ -83,7 +123,10 @@ export function ChatMessage({ message, onSelectCarrier }: ChatMessageProps) {
             </div>
 
             {message.isLoading ? (
-              <TypingIndicator />
+              <div>
+                <TypingIndicator />
+                {!isUser && <RecommendationSkeletons />}
+              </div>
             ) : (
               <div>
                 {/* Summary Text */}
@@ -176,12 +219,14 @@ export function ChatMessage({ message, onSelectCarrier }: ChatMessageProps) {
                     </div>
 
                     {/* Responsive Grid - 1 column on mobile, 2 on tablet, 3 on desktop */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 items-start gap-3 sm:gap-4">
                       {recommendations.map((rec, idx) => (
-                        <div key={rec?.rank || idx} className="h-[400px] sm:h-[450px] lg:h-[500px]">
+                        <div key={rec?.rank || idx}>
                           <RecommendationCard
                             recommendation={rec}
-                            onSelect={() => onSelectCarrier?.(rec)}
+                            onSelect={() => handleSelectRecommendation(rec)}
+                            isSelected={selectedCarrier === rec.carrier}
+                            isSelectionLocked={selectedCarrier !== null}
                           />
                         </div>
                       ))}
