@@ -112,6 +112,10 @@ export async function parseQueryTool(state: AgentState): Promise<Partial<AgentSt
     console.log(`[ParseQuery] AI missed coverage, using regex fallback: ${regexParsed.coverage}`);
     aiParsed.coverage = regexParsed.coverage;
   }
+  if (aiParsed.intent === 'followup' && !aiParsed.selectedCarrier && regexParsed.selectedCarrier) {
+    console.log(`[ParseQuery] AI missed selected carrier, using regex fallback: ${regexParsed.selectedCarrier}`);
+    aiParsed.selectedCarrier = regexParsed.selectedCarrier;
+  }
 
   // Handle follow-up queries
   if (aiParsed.intent === 'followup' && aiParsed.selectedCarrier) {

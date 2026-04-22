@@ -7,13 +7,36 @@ import { AgentState } from '../state';
 import { getCarrierAppetites, CarrierAppetiteRecord, AGENCY_CONTACT } from '../data/carrierDataIndex';
 import { generateAICarrierDetails } from './aiProcessor';
 
+function extractSelectedCarrierFromQuery(query: string): string {
+  const followupPatterns = [
+    /(?:proceed with|select|choose|go with|i'd like)\s+([^()]+?)(?:\s*\(|$)/i,
+    /more (?:details|info|about)\s+([^()]+?)(?:\s*\(|$)/i,
+    /tell me (?:more )?about\s+([^()]+?)(?:\s*\(|$)/i,
+  ];
+
+  for (const pattern of followupPatterns) {
+    const match = query.match(pattern);
+    if (match?.[1]) {
+      return match[1].replace(/\*\*/g, '').trim();
+    }
+  }
+
+  return '';
+}
+
 export async function carrierDetailsTool(state: AgentState): Promise<Partial<AgentState>> {
   // Extract selected carrier from messages
   const selectedCarrierMsg = state.messages.find(m =>
     m.content.startsWith('SELECTED_CARRIER:')
   );
 
-  if (!selectedCarrierMsg) {
+  const selectedCarrierFromMessage = selectedCarrierMsg
+    ? selectedCarrierMsg.content.replace('SELECTED_CARRIER:', '').trim()
+    : '';
+  const selectedCarrierFromQuery = selectedCarrierFromMessage ? '' : extractSelectedCarrierFromQuery(state.userQuery);
+  const selectedCarrier = selectedCarrierFromMessage || selectedCarrierFromQuery;
+
+  if (!selectedCarrier) {
     return {
       escalate: true,
       escalationReason: 'No carrier selected. Please select a carrier from the recommendations.',
@@ -21,7 +44,6 @@ export async function carrierDetailsTool(state: AgentState): Promise<Partial<Age
     };
   }
 
-  const selectedCarrier = selectedCarrierMsg.content.replace('SELECTED_CARRIER:', '').trim();
   console.log(`[CarrierDetails] Generating AI-enhanced details for: ${selectedCarrier}`);
 
   // Find carrier in our data

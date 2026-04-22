@@ -25,26 +25,120 @@ export async function exportChatToPDF(
 
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const margin = 15;
+  const margin = 14;
   const contentWidth = pageWidth - 2 * margin;
-  let yPosition = margin;
+  const footerHeight = 10;
+  const firstPageTop = 52;
+  const standardPageTop = 30;
+  let yPosition = firstPageTop;
+  const generatedAt = new Date();
 
   // Colors
   const colors = {
-    primary: [30, 30, 30] as [number, number, number],
-    secondary: [80, 80, 80] as [number, number, number],
+    primary: [25, 25, 25] as [number, number, number],
+    secondary: [60, 60, 60] as [number, number, number],
     muted: [120, 120, 120] as [number, number, number],
-    accent: [59, 130, 246] as [number, number, number],
-    success: [34, 197, 94] as [number, number, number],
-    tableHeader: [249, 250, 251] as [number, number, number],
-    tableBorder: [229, 231, 235] as [number, number, number],
+    accent: [40, 40, 40] as [number, number, number],
+    assistantBg: [255, 255, 255] as [number, number, number],
+    userBg: [255, 255, 255] as [number, number, number],
+    headerBg: [255, 255, 255] as [number, number, number],
+    success: [70, 70, 70] as [number, number, number],
+    tableHeader: [255, 255, 255] as [number, number, number],
+    tableBorder: [210, 210, 210] as [number, number, number],
   };
+
+  const truncateToWidth = (text: string, maxWidth: number): string => {
+    if (pdf.getTextWidth(text) <= maxWidth) return text;
+    let truncated = text;
+    while (truncated.length > 3 && pdf.getTextWidth(`${truncated}...`) > maxWidth) {
+      truncated = truncated.slice(0, -1);
+    }
+    return `${truncated}...`;
+  };
+
+  const renderWrappedRichText = (
+    text: string,
+    startX: number,
+    maxWidth: number,
+    fontSize: number,
+    lineHeight: number,
+    paragraphSpacing: number
+  ): void => {
+    const segments = parseBoldText(text);
+    let xPos = startX;
+    const maxX = startX + maxWidth;
+
+    for (const segment of segments) {
+      pdf.setFont('helvetica', segment.bold ? 'bold' : 'normal');
+      pdf.setFontSize(fontSize);
+
+      const tokens = segment.text.split(/(\s+)/).filter(token => token.length > 0);
+      for (const token of tokens) {
+        const isWhitespace = token.trim().length === 0;
+        if (isWhitespace && xPos === startX) {
+          continue;
+        }
+
+        const tokenWidth = pdf.getTextWidth(token);
+        if (!isWhitespace && xPos + tokenWidth > maxX && xPos > startX) {
+          yPosition += lineHeight;
+          checkPageBreak(lineHeight + 1);
+          xPos = startX;
+        }
+
+        pdf.text(token, xPos, yPosition);
+        xPos += tokenWidth;
+      }
+    }
+
+    yPosition += paragraphSpacing;
+  };
+
+  const drawPageHeader = (compact = false): void => {
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(10);
+    pdf.setTextColor(...colors.primary);
+    pdf.text('Insurance Placement AI', margin, 10);
+
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8);
+    pdf.setTextColor(...colors.muted);
+    pdf.text('Conversation Export', margin, 15);
+
+    const timestamp = generatedAt.toLocaleString();
+    pdf.text(timestamp, pageWidth - margin - pdf.getTextWidth(timestamp), 15);
+
+    pdf.setDrawColor(...colors.tableBorder);
+    pdf.setLineWidth(0.3);
+    pdf.line(margin, 19, pageWidth - margin, 19);
+
+    if (!compact) {
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(18);
+      pdf.setTextColor(...colors.primary);
+      pdf.text(title, margin, 32);
+
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.setTextColor(...colors.secondary);
+      pdf.text(`Messages: ${messages.filter(m => !m.isLoading).length}`, margin, 39);
+      const dateText = `Generated: ${generatedAt.toLocaleDateString()} ${generatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      pdf.text(dateText, pageWidth - margin - pdf.getTextWidth(dateText), 39);
+
+      pdf.setDrawColor(...colors.tableBorder);
+      pdf.setLineWidth(0.35);
+      pdf.line(margin, 44, pageWidth - margin, 44);
+    }
+  };
+
+  drawPageHeader(false);
 
   // Check page break
   const checkPageBreak = (requiredSpace: number): boolean => {
-    if (yPosition + requiredSpace > pageHeight - margin) {
+    if (yPosition + requiredSpace > pageHeight - margin - footerHeight) {
       pdf.addPage();
-      yPosition = margin;
+      drawPageHeader(true);
+      yPosition = standardPageTop;
       return true;
     }
     return false;
@@ -114,7 +208,6 @@ export async function exportChatToPDF(
       // Draw row background
       if (isHeader) {
         pdf.setFillColor(...colors.tableHeader);
-        pdf.rect(margin, yPosition - 4, contentWidth, rowHeight, 'F');
       }
 
       // Draw cells
@@ -165,7 +258,7 @@ export async function exportChatToPDF(
           tableRows = [];
           inTable = false;
         }
-        yPosition += 2;
+        yPosition += 2.5;
         continue;
       }
 
@@ -190,9 +283,9 @@ export async function exportChatToPDF(
       // H2 heading
       if (trimmedLine.startsWith('## ')) {
         checkPageBreak(12);
-        yPosition += 4;
+        yPosition += 4.5;
         pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(14);
+        pdf.setFontSize(13);
         pdf.setTextColor(...colors.primary);
         pdf.text(trimmedLine.replace('## ', ''), margin, yPosition);
         yPosition += 3;
@@ -209,7 +302,7 @@ export async function exportChatToPDF(
         checkPageBreak(10);
         yPosition += 3;
         pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(12);
+        pdf.setFontSize(11.5);
         pdf.setTextColor(...colors.primary);
         pdf.text(trimmedLine.replace('### ', ''), margin, yPosition);
         yPosition += 6;
@@ -221,7 +314,7 @@ export async function exportChatToPDF(
         checkPageBreak(8);
         yPosition += 2;
         pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(10);
+        pdf.setFontSize(10.5);
         pdf.setTextColor(...colors.primary);
         pdf.text(trimmedLine.replace('#### ', ''), margin, yPosition);
         yPosition += 5;
@@ -241,7 +334,7 @@ export async function exportChatToPDF(
 
       // Bullet point
       if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
-        checkPageBreak(6);
+        checkPageBreak(8);
         const bulletText = trimmedLine.slice(2);
         const bulletIndent = 5;
 
@@ -249,34 +342,14 @@ export async function exportChatToPDF(
         pdf.setFontSize(10);
         pdf.setTextColor(...colors.secondary);
         pdf.text('•', margin + 2, yPosition);
-
-        // Handle bold in bullet text
-        const segments = parseBoldText(bulletText);
-        let xPos = margin + bulletIndent + 3;
-
-        for (const segment of segments) {
-          pdf.setFont('helvetica', segment.bold ? 'bold' : 'normal');
-          const segmentLines = wrapText(segment.text, contentWidth - bulletIndent - 5, 10);
-
-          for (let j = 0; j < segmentLines.length; j++) {
-            if (j > 0) {
-              yPosition += 4;
-              checkPageBreak(5);
-              xPos = margin + bulletIndent + 3;
-            }
-            pdf.text(segmentLines[j], xPos, yPosition);
-            if (j === 0) xPos += pdf.getTextWidth(segmentLines[j]);
-          }
-        }
-
-        yPosition += 5;
+        renderWrappedRichText(bulletText, margin + bulletIndent + 3, contentWidth - bulletIndent - 5, 10, 4, 5.5);
         continue;
       }
 
       // Numbered list
       const numberedMatch = trimmedLine.match(/^(\d+)\.\s+(.+)$/);
       if (numberedMatch) {
-        checkPageBreak(6);
+        checkPageBreak(8);
         const [, num, text] = numberedMatch;
         const numIndent = 5;
 
@@ -284,27 +357,7 @@ export async function exportChatToPDF(
         pdf.setFontSize(10);
         pdf.setTextColor(...colors.secondary);
         pdf.text(`${num}.`, margin + 1, yPosition);
-
-        // Handle bold in numbered text
-        const segments = parseBoldText(text);
-        let xPos = margin + numIndent + 3;
-
-        for (const segment of segments) {
-          pdf.setFont('helvetica', segment.bold ? 'bold' : 'normal');
-          const segmentLines = wrapText(segment.text, contentWidth - numIndent - 5, 10);
-
-          for (let j = 0; j < segmentLines.length; j++) {
-            if (j > 0) {
-              yPosition += 4;
-              checkPageBreak(5);
-              xPos = margin + numIndent + 3;
-            }
-            pdf.text(segmentLines[j], xPos, yPosition);
-            if (j === 0) xPos += pdf.getTextWidth(segmentLines[j]);
-          }
-        }
-
-        yPosition += 5;
+        renderWrappedRichText(text, margin + numIndent + 3, contentWidth - numIndent - 5, 10, 4, 5.5);
         continue;
       }
 
@@ -312,31 +365,7 @@ export async function exportChatToPDF(
       checkPageBreak(6);
       pdf.setFontSize(10);
       pdf.setTextColor(...colors.secondary);
-
-      const segments = parseBoldText(trimmedLine);
-      let xPos = margin;
-      let lineY = yPosition;
-
-      for (const segment of segments) {
-        pdf.setFont('helvetica', segment.bold ? 'bold' : 'normal');
-        const words = segment.text.split(' ');
-
-        for (let w = 0; w < words.length; w++) {
-          const word = words[w] + (w < words.length - 1 ? ' ' : '');
-          const wordWidth = pdf.getTextWidth(word);
-
-          if (xPos + wordWidth > margin + contentWidth && xPos > margin) {
-            xPos = margin;
-            lineY += 4;
-            checkPageBreak(5);
-          }
-
-          pdf.text(word, xPos, lineY);
-          xPos += wordWidth;
-        }
-      }
-
-      yPosition = lineY + 5;
+      renderWrappedRichText(trimmedLine, margin, contentWidth, 10, 4, 5.5);
     }
 
     // Render any remaining table
@@ -347,26 +376,6 @@ export async function exportChatToPDF(
 
   // === PDF CONTENT ===
 
-  // Title
-  pdf.setFontSize(20);
-  pdf.setFont('helvetica', 'bold');
-  pdf.setTextColor(...colors.primary);
-  pdf.text(title, margin, yPosition);
-  yPosition += 8;
-
-  // Subtitle
-  pdf.setFontSize(10);
-  pdf.setFont('helvetica', 'normal');
-  pdf.setTextColor(...colors.muted);
-  pdf.text(`Generated: ${new Date().toLocaleString()}`, margin, yPosition);
-  yPosition += 8;
-
-  // Header separator
-  pdf.setDrawColor(...colors.tableBorder);
-  pdf.setLineWidth(0.5);
-  pdf.line(margin, yPosition, pageWidth - margin, yPosition);
-  yPosition += 10;
-
   // Process messages
   for (const message of messages) {
     if (message.isLoading) continue;
@@ -375,16 +384,12 @@ export async function exportChatToPDF(
 
     // Message header
     const role = message.role === 'user' ? 'You' : 'Insurance AI';
-    const roleColor = message.role === 'user' ? colors.secondary : colors.accent;
-
-    // Role badge background
-    pdf.setFillColor(...(message.role === 'user' ? [243, 244, 246] : [239, 246, 255]) as [number, number, number]);
-    pdf.roundedRect(margin, yPosition - 4, 25, 7, 1, 1, 'F');
+    const roleColor = colors.primary;
 
     pdf.setFontSize(10);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(...roleColor);
-    pdf.text(role, margin + 2, yPosition);
+    pdf.text(role, margin, yPosition);
 
     // Timestamp
     if (includeTimestamps && message.timestamp) {
@@ -398,7 +403,7 @@ export async function exportChatToPDF(
       pdf.text(timestamp, pageWidth - margin - pdf.getTextWidth(timestamp), yPosition);
     }
 
-    yPosition += 8;
+    yPosition += 8.5;
 
     // Message content
     if (message.content) {
@@ -411,49 +416,52 @@ export async function exportChatToPDF(
       yPosition += 3;
 
       pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(11);
+      pdf.setFontSize(11.5);
       pdf.setTextColor(...colors.primary);
       pdf.text('Top Recommendations', margin, yPosition);
-      yPosition += 8;
+      yPosition += 7;
 
       for (const rec of message.analysisData.recommendations) {
-        checkPageBreak(30);
+        checkPageBreak(34);
 
-        // Card background
-        pdf.setFillColor(249, 250, 251);
+        // Section frame
         pdf.setDrawColor(...colors.tableBorder);
-        pdf.roundedRect(margin, yPosition - 4, contentWidth, 28, 2, 2, 'FD');
+        pdf.setLineWidth(0.25);
+        pdf.rect(margin, yPosition - 4, contentWidth, 30, 'S');
 
-        // Rank badge
-        const rankColors: { [key: number]: [number, number, number] } = {
-          1: [234, 179, 8],
-          2: [156, 163, 175],
-          3: [217, 119, 6]
-        };
-        pdf.setFillColor(...(rankColors[rec.rank] || colors.muted));
-        pdf.circle(margin + 6, yPosition + 2, 4, 'F');
+        // Rank label
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(9);
-        pdf.setTextColor(255, 255, 255);
-        pdf.text(String(rec.rank), margin + 4.5, yPosition + 3.5);
+        pdf.setTextColor(...colors.secondary);
+        pdf.text(`#${rec.rank}`, margin + 2, yPosition + 3.5);
 
         // Carrier name
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(11);
         pdf.setTextColor(...colors.primary);
-        pdf.text(rec.carrier, margin + 14, yPosition + 3);
-
-        // Match score
         const scoreText = `${rec.matchScore}% match`;
         pdf.setFont('helvetica', 'normal');
         pdf.setFontSize(9);
         pdf.setTextColor(...colors.success);
-        pdf.text(scoreText, margin + contentWidth - pdf.getTextWidth(scoreText) - 3, yPosition + 3);
+        const scoreX = margin + contentWidth - pdf.getTextWidth(scoreText) - 3;
+        const carrierMaxWidth = Math.max(20, scoreX - (margin + 14) - 4);
+        const carrierText = truncateToWidth(rec.carrier, carrierMaxWidth);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(11);
+        pdf.setTextColor(...colors.primary);
+        pdf.text(carrierText, margin + 14, yPosition + 3);
+
+        // Match score
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(9);
+        pdf.setTextColor(...colors.success);
+        pdf.text(scoreText, scoreX, yPosition + 3);
 
         // Appetite status
+        const appetiteText = rec.appetiteStatus || 'Strong Appetite';
         pdf.setFontSize(8);
-        pdf.setTextColor(...colors.muted);
-        pdf.text(rec.appetiteStatus || 'Strong Appetite', margin + 14, yPosition + 9);
+        pdf.setTextColor(...colors.secondary);
+        pdf.text(truncateToWidth(appetiteText, contentWidth - 26), margin + 14, yPosition + 8.3);
 
         // Overview
         if (rec.overview) {
@@ -467,17 +475,17 @@ export async function exportChatToPDF(
           }
         }
 
-        yPosition += 32;
+        yPosition += 34;
       }
     }
 
     // Message separator
-    yPosition += 3;
+    yPosition += 2;
     checkPageBreak(6);
     pdf.setDrawColor(240, 240, 240);
     pdf.setLineWidth(0.2);
     pdf.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 8;
+    yPosition += 7;
   }
 
   // Footer

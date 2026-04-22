@@ -80,6 +80,15 @@ export function ChatInterface() {
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isSendingRef = useRef(false);
+  const lastSubmissionRef = useRef<{ content: string; at: number } | null>(null);
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
+    if (!scrollRef.current) return;
+    const viewport = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null;
+    const target = viewport ?? scrollRef.current;
+    target.scrollTo({ top: target.scrollHeight, behavior });
+  };
 
   useEffect(() => {
     initAgent();
@@ -92,9 +101,7 @@ export function ChatInterface() {
   }, [user]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    requestAnimationFrame(() => scrollToBottom('auto'));
   }, [messages]);
 
   const initAgent = async () => {
@@ -189,12 +196,30 @@ export function ChatInterface() {
   };
 
   const handleSelectCarrier = (carrier: DetailedRecommendation) => {
+    if (isLoading || isSendingRef.current) return;
     const selectionMessage = `I'd like to proceed with **${carrier.carrier}** (${carrier.matchScore}% match). Please provide more details about this carrier and next steps for placement.`;
+    scrollToBottom('smooth');
     sendMessage(selectionMessage);
   };
 
   const sendMessage = async (content: string) => {
     if (!user) return;
+
+    const normalizedContent = content.trim().replace(/\s+/g, ' ');
+    if (!normalizedContent) return;
+
+    const now = Date.now();
+    const lastSubmission = lastSubmissionRef.current;
+    // Prevent accidental duplicate sends from double-click/rapid keypress.
+    if (lastSubmission && lastSubmission.content === normalizedContent && now - lastSubmission.at < 1500) {
+      return;
+    }
+    if (isSendingRef.current) {
+      return;
+    }
+
+    isSendingRef.current = true;
+    lastSubmissionRef.current = { content: normalizedContent, at: now };
     setError(null);
 
     // Create new chat if none active
@@ -221,7 +246,7 @@ export function ChatInterface() {
     const userMessage: Message = {
       id: generateId(),
       role: 'user',
-      content,
+      content: normalizedContent,
       timestamp: new Date(),
     };
     setMessages(prev => [...prev, userMessage]);
@@ -230,7 +255,7 @@ export function ChatInterface() {
     try {
       await addMessageToChat(chatId, {
         role: 'user',
-        content,
+        content: normalizedContent,
         timestamp: new Date()
       });
     } catch (error) {
@@ -239,11 +264,11 @@ export function ChatInterface() {
 
     // Update chat title if this is the first message
     if (messages.length === 0) {
-      const newTitle = generateTitle(content);
+      const newTitle = generateTitle(normalizedContent);
       try {
         await updateChatTitle(chatId, newTitle);
         setChats(prev => prev.map(c =>
-          c.id === chatId ? { ...c, title: newTitle, lastMessage: content } : c
+          c.id === chatId ? { ...c, title: newTitle, lastMessage: normalizedContent } : c
         ));
       } catch (error) {
         console.error('Failed to update chat title:', error);
@@ -263,8 +288,8 @@ export function ChatInterface() {
 
     try {
       // Run LangGraph agent
-      console.log('[ChatInterface] Running LangGraph agent for:', content);
-      const result = await runInsuranceAgent(content);
+      console.log('[ChatInterface] Running LangGraph agent for:', normalizedContent);
+      const result = await runInsuranceAgent(normalizedContent);
 
       console.log('[ChatInterface] Result:', {
         totalEligible: result.totalEligibleCarriers,
@@ -318,6 +343,7 @@ export function ChatInterface() {
       setMessages(prev => prev.slice(0, -1).concat(errorMessage));
     } finally {
       setIsLoading(false);
+      isSendingRef.current = false;
     }
   };
 
